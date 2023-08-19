@@ -1,6 +1,7 @@
 <?php
 
 use Drupal\Core\Entity\EntityInterface;
+use Drupal\Core\File\FileSystemInterface;
 
 function convertir_a_mp3($audio_origen, $audio_desti) {
 	
@@ -76,7 +77,7 @@ function encapsulator_entity_presave(EntityInterface $entity) {
 		switch ($entity->bundle()) {
 			case 'capsula':
 				
-				kint($entity->bundle());
+				//kint($entity->bundle());
 				
 				\Drupal::logger('encapsulator')->notice('INICI DEL PROCÉS!');
 				
@@ -95,18 +96,18 @@ function encapsulator_entity_presave(EntityInterface $entity) {
 				$locucio_path_relative = ltrim($file_locucio->getFileUri(), $prefix_private);
 				$locucio_path_absolute = $path . $locucio_path_relative;
 				
-				kint($locucio_path_absolute);
+				//kint($locucio_path_absolute);
 				
 				
 
 				//Obtenim el camp on hi ha el terme de taxonomia
-				kint($entity->get('field_capsula_tipus_de_capsula')->getValue()[0]['target_id']);
+				//kint($entity->get('field_capsula_tipus_de_capsula')->getValue()[0]['target_id']);
 				$intro_term_id = $entity->get('field_capsula_tipus_de_capsula')->getValue()[0]['target_id'];
 				$intro_term = \Drupal\taxonomy\Entity\Term::load($intro_term_id);
-				kint($intro_term);
+				//kint($intro_term);
 				
 				//Obtenim el camp on hi ha el fitxer d'audio d'intro (que es troba com a camp en el terme de taxonomia)
-				kint($intro_term->get('field_tipus_de_capsula_audio')->getValue()[0]['target_id']);
+				//kint($intro_term->get('field_tipus_de_capsula_audio')->getValue()[0]['target_id']);
 				$intro_id = $intro_term->get('field_tipus_de_capsula_audio')->getValue()[0]['target_id'];
 				
 				//Obtenin l'objecte que representa l'audio de l'intro
@@ -114,18 +115,18 @@ function encapsulator_entity_presave(EntityInterface $entity) {
 				$intro_path_relative = str_replace($prefix_private, '', $file_intro->getFileUri());
 				$intro_path_absolute = $path . $intro_path_relative;
 				
-				kint($intro_path_absolute);
+				//kint($intro_path_absolute);
 					
 				
 				
 				//Obtenim el camp on hi ha el terme de taxonomia
-				kint($entity->get('field_capsula_tipus_de_final')->getValue()[0]['target_id']);
+				//kint($entity->get('field_capsula_tipus_de_final')->getValue()[0]['target_id']);
 				$outro_term_id = $entity->get('field_capsula_tipus_de_final')->getValue()[0]['target_id'];
 				$outro_term = \Drupal\taxonomy\Entity\Term::load($outro_term_id);
-				kint($outro_term);
+				//kint($outro_term);
 				
 				//Obtenim el camp on hi ha el fitxer d'audio d'outro (que es troba com a camp en el terme de taxonomia)
-				kint($outro_term->get('field_tipus_de_final_audio')->getValue()[0]['target_id']);
+				//kint($outro_term->get('field_tipus_de_final_audio')->getValue()[0]['target_id']);
 				$outro_id = $outro_term->get('field_tipus_de_final_audio')->getValue()[0]['target_id'];
 				
 				//Obtenin l'objecte que representa l'audio de l'outro
@@ -133,7 +134,7 @@ function encapsulator_entity_presave(EntityInterface $entity) {
 				$outro_path_relative = str_replace($prefix_private, '', $file_outro->getFileUri());
 				$outro_path_absolute = $path . $outro_path_relative;
 				
-				kint($outro_path_absolute);
+				//kint($outro_path_absolute);
 
 				
 				//Ara que ja tenim els 3 fitxers d'àudio necessaris els processarem amb la llibreria FFMpeg
@@ -145,6 +146,7 @@ function encapsulator_entity_presave(EntityInterface $entity) {
 				$intro_path_tmp = $tmp . $uuid_tmp . '_intro.mp3';
 				$locucio_path_tmp = $tmp . $uuid_tmp . '_locucio.mp3';
 				$outro_path_tmp = $tmp . $uuid_tmp . '_outro.mp3';
+				$resultat_tmp = $tmp . $uuid_tmp . '_resultat.mp3'; //'/var/www/html/encapsulador/web/modules/custom/encapsulator/units.mp3'
 				
 				//Convertim/codifiquem els 3 fitxers en MP3
 				$resultat1 = convertir_a_mp3($intro_path_absolute, $intro_path_tmp);
@@ -154,12 +156,12 @@ function encapsulator_entity_presave(EntityInterface $entity) {
 				if ($resultat1 && $resultat2 && $resultat3) {
 					
 					//Unim els 3 fitxers en un de sol
-					$resultat_unir = unir_parts($intro_path_tmp, $locucio_path_tmp, $outro_path_tmp, '/var/www/html/encapsulador/web/modules/custom/encapsulator/units.mp3');
+					$resultat_unir = unir_parts($intro_path_tmp, $locucio_path_tmp, $outro_path_tmp, $resultat_tmp);
 					
 					if ($resultat_unir) {
 						
 						//Validem que el fitxer resultant s'ha generat correctament
-						if (validar_resultat('/var/www/html/encapsulador/web/modules/custom/encapsulator/units.mp3')) {
+						if (validar_resultat($resultat_tmp)) {
 							\Drupal::logger('encapsulator')->notice('FI DEL PROCÉS CORRECTE!');
 						} else {
 							$resultat_final = false;
@@ -177,8 +179,19 @@ function encapsulator_entity_presave(EntityInterface $entity) {
 					\Drupal::logger('encapsulator')->error('FI DEL PROCÉS INCORRECTE!');
 				}
 				
-				//field_capsula_generada
+				//Guardem el fitxer de la capsula resultant final en el camp del node
+				$handle = fopen($resultat_tmp, 'r');
+				$fileRepository = \Drupal::service('file.repository');
+				$file = $fileRepository->writeData(fread($handle, filesize($resultat_tmp)), $prefix_private . 'resultat.mp3', FileSystemInterface::EXISTS_REPLACE);
+				fclose($handle);
 				
+				//Un cop guardat el fitxer al directori final i creada la seva entitat dins del sistema Drupal, el vincularem l'entitat/node que toqui
+				//$entity_storage = \Drupal::entityTypeManager()->getStorage('node');
+				//$entity = $entity_storage->load(1);
+				$entity->set('field_capsula_generada', $file);
+				//$entity->save(); //Si cridem aquesta funció dins del hook_entity_presave() generarem una crida recursiva en aquest hook que no acabarà mai
+				
+				\Drupal::logger('encapsulator')->notice('### PROCÉS COMPLETAT COMPLETAMENT ###');
 
 				
 				// 1 - Treure silencis (davant i darrera)

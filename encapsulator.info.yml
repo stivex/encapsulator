@@ -1,0 +1,5 @@
+name: Encapsulator
+type: module
+description: 'Permet unir i processar arxius multimèdia'
+package: 'Custom'
+core_version_requirement: ^10

@@ -21,7 +21,7 @@ function convertir_a_mp3($audio_origen, $audio_desti) {
 
 		$audio->save($format, $audio_desti);
 
-		\Drupal::logger('encapsulator')->notice('Conversió completada, arxiu guardat a: ' . $audio_desti);
+		\Drupal::logger('encapsulator')->notice('Conversió a MP3 completada, arxiu guardat a: ' . $audio_desti);
 
 		return true;
 		
@@ -68,137 +68,438 @@ function validar_resultat($audio_a_validar) {
 }
 
 /**
+ * Funció que s'encarrega d'eliminar els subdirectoris que no tenen contingut a dins seu (usat pels subdirectoris 'locucions' i 'capsules')
+ */
+function netejar_subdirectori($path) {
+
+	//Obtenim els subdirectoris
+	$arr = array_diff(scandir($path), array('..', '.'));
+
+	foreach ($arr as $value) {
+		
+		$item = $path . '/' . $value;
+		
+		//Comprovem que sigui un dierctori
+		if (is_dir($item)) {
+			
+			$arr_sub = array_diff(scandir($item), array('..', '.'));
+			
+			//Comprovem que no tingui cap contingut a dins seu
+			if (sizeof($arr_sub) == 0) {
+				\Drupal::logger('encapsulator')->notice('Esborrem el directori ja que no té contingut dins seu: ' . $item);
+				rmdir($item);
+			}
+
+		}
+
+	}
+	
+}
+
+/**
  * Implements hook_entity_presave().
  */
 function encapsulator_entity_presave(EntityInterface $entity) {
+		/*
+	if ($entity->getEntityTypeId() == 'node') {
+		
+		switch ($entity->bundle()) {
+			case 'capsula':
+				
+				try {
+
+					//kint($entity->bundle());
+
+					\Drupal::logger('encapsulator')->notice('### INICI DEL PROCÉS GENERACIÓ DE LA CÀPSULA ###');
+
+
+					//Constants per poder generar els paths del sistema on es troben els fitxers
+					$path = '/home/locutor/encapsulador/';
+					$prefix_private = 'private://';
+					$tmp = \Drupal::service('file_system')->getTempDirectory() . '/';
+
+					//Obtenim el camp on hi ha el fitxer de locució (veu del locutor)
+					$locucio_id = $entity->get('field_capsula_locucio')->getValue()[0]['target_id'];
+
+					//Obtenim l'objecte que representa la locució
+					$file_locucio = \Drupal::entityTypeManager()->getStorage('file')->load($locucio_id);
+					
+					if ($entity->isNew()) {
+						//Estem creant/insertant un nou node (anem a buscar el fitxer de la locució en el directori on es guarda temporalment fins que sigui desat el node definitivament)
+						$locucio_path_absolute = $file_locucio->createFileUrl(true);
+					} else {
+						//Estem modificant/actualitzant un node ja existent (anem a buscar el fitxer de la locució en el directori on el tenim guardat definitivament)
+						$locucio_path_relative = ltrim($file_locucio->getFileUri(), $prefix_private);
+						$locucio_path_absolute = $path . $locucio_path_relative;	
+					}
+
+					//kint($locucio_path_absolute);
+					\Drupal::logger('encapsulator')->notice($path);
+					\Drupal::logger('encapsulator')->notice($prefix_private);
+					\Drupal::logger('encapsulator')->notice($tmp);
+					\Drupal::logger('encapsulator')->notice($file_locucio->getFileUri());
+					//\Drupal::logger('encapsulator')->notice($locucio_path_relative);
+					\Drupal::logger('encapsulator')->notice($locucio_path_absolute);
+
+
+					//Obtenim el camp on hi ha el terme de taxonomia
+					//kint($entity->get('field_capsula_tipus_de_capsula')->getValue()[0]['target_id']);
+					$intro_term_id = $entity->get('field_capsula_tipus_de_capsula')->getValue()[0]['target_id'];
+					$intro_term = \Drupal\taxonomy\Entity\Term::load($intro_term_id);
+					//kint($intro_term);
+
+					//Obtenim el camp on hi ha el fitxer d'audio d'intro (que es troba com a camp en el terme de taxonomia)
+					//kint($intro_term->get('field_tipus_de_capsula_audio')->getValue()[0]['target_id']);
+					$intro_id = $intro_term->get('field_tipus_de_capsula_audio')->getValue()[0]['target_id'];
+
+					//Obtenin l'objecte que representa l'audio de l'intro
+					$file_intro = \Drupal::entityTypeManager()->getStorage('file')->load($intro_id);
+					$intro_path_relative = str_replace($prefix_private, '', $file_intro->getFileUri());
+					$intro_path_absolute = $path . $intro_path_relative;
+
+					//kint($intro_path_absolute);
+
+
+
+					//Obtenim el camp on hi ha el terme de taxonomia
+					//kint($entity->get('field_capsula_tipus_de_final')->getValue()[0]['target_id']);
+					$outro_term_id = $entity->get('field_capsula_tipus_de_final')->getValue()[0]['target_id'];
+					$outro_term = \Drupal\taxonomy\Entity\Term::load($outro_term_id);
+					//kint($outro_term);
+
+					//Obtenim el camp on hi ha el fitxer d'audio d'outro (que es troba com a camp en el terme de taxonomia)
+					//kint($outro_term->get('field_tipus_de_final_audio')->getValue()[0]['target_id']);
+					$outro_id = $outro_term->get('field_tipus_de_final_audio')->getValue()[0]['target_id'];
+
+					//Obtenin l'objecte que representa l'audio de l'outro
+					$file_outro = \Drupal::entityTypeManager()->getStorage('file')->load($outro_id);
+					$outro_path_relative = str_replace($prefix_private, '', $file_outro->getFileUri());
+					$outro_path_absolute = $path . $outro_path_relative;
+
+					//kint($outro_path_absolute);
+
+
+					//Ara que ja tenim els 3 fitxers d'àudio necessaris els processarem amb la llibreria FFMpeg
+					$resultat_final = true;
+
+					//Generem els directoris temporals de les parts
+					$uuid = \Drupal::service('uuid');
+					$uuid_tmp = $uuid->generate();
+					$intro_path_tmp = $tmp . $uuid_tmp . '_intro.mp3';
+					$locucio_path_tmp = $tmp . $uuid_tmp . '_locucio.mp3';
+					$outro_path_tmp = $tmp . $uuid_tmp . '_outro.mp3';
+					$resultat_tmp = $tmp . $uuid_tmp . '_resultat.mp3'; //'/var/www/html/encapsulador/web/modules/custom/encapsulator/units.mp3'
+
+					//Convertim/codifiquem els 3 fitxers en MP3
+					$resultat1 = convertir_a_mp3($intro_path_absolute, $intro_path_tmp);
+					$resultat2 = convertir_a_mp3($locucio_path_absolute, $locucio_path_tmp);
+					$resultat3 = convertir_a_mp3($outro_path_absolute, $outro_path_tmp);
+
+					if ($resultat1 && $resultat2 && $resultat3) {
+
+						//Unim els 3 fitxers en un de sol
+						$resultat_unir = unir_parts($intro_path_tmp, $locucio_path_tmp, $outro_path_tmp, $resultat_tmp);
+
+						if ($resultat_unir) {
+
+							//Validem que el fitxer resultant s'ha generat correctament
+							if (validar_resultat($resultat_tmp)) {
+								\Drupal::logger('encapsulator')->notice('OK en la generació de la càpsula.');
+							} else {
+								$resultat_final = false;
+							}
+
+						} else {
+							$resultat_final = false;
+						}
+
+					} else {
+						$resultat_final = false;
+					}
+
+					if (!$resultat_final) {
+						throw new Exception('ERROR en la generació de la càpsula');
+					}
+
+					//Guardem el fitxer de la capsula resultant final en el camp del node
+					$handle = fopen($resultat_tmp, 'r');
+					$fileRepository = \Drupal::service('file.repository');
+					$file = $fileRepository->writeData(fread($handle, filesize($resultat_tmp)), $prefix_private . 'resultat.mp3', FileSystemInterface::EXISTS_REPLACE);
+					fclose($handle);
+
+					//Un cop guardat el fitxer al directori final i creada la seva entitat dins del sistema Drupal, el vincularem l'entitat/node que toqui
+					//$entity_storage = \Drupal::entityTypeManager()->getStorage('node');
+					//$entity = $entity_storage->load(1);
+					$entity->set('field_capsula_generada', $file);
+					//$entity->save(); //Si cridem aquesta funció dins del hook_entity_presave() generarem una crida recursiva en aquest hook que no acabarà mai
+					\Drupal::logger('encapsulator')->notice('OK en desar de la càpsula al directori de destí.');
+
+					\Drupal::logger('encapsulator')->notice('### FI DEL PROCÉS GENERACIÓ DE LA CÀPSULA ###');
+
+
+
+				} catch(Exception $e) {
+					\Drupal::logger('encapsulator')->error('ERROR en la generació de la càpsula: ' . $e->getMessage());
+					//Llancem una excepció que provocarà la interrupció de desat del node actual
+					//throw new Exception('ERROR en la generació de la càpsula');
+				}
+
+
+
+
+
+				// 1 - Treure silencis (davant i darrera)
+				// 2 - Unir els 3 fitxers
+				// 3 - Normalitzar el fitxer
+				// 4 - Guardar-ho en el camp del node on es guarda la càpsula generada
+
+				// 5 - Sync/copiar a directori que poden emetre (segons les dates d'inici i fi)
+				// 6 - Eliminar del directori que es poden emetre si la data ha vençut
+				
+				
+				
+				break;
+		}
+		
+	}
+	*/
+	return $entity;
+	
+}
+
+
+/**
+ * Implements hook_cron().
+ */
+function encapsulator_cron() {
+	
+	\Drupal::logger('encapsulator')->notice('### INICI DEL PROCÉS PER ELIMINAR FITXERS ORFES ###');
+	
+	//Obtenim tots els identificadors de fitxers
+	$fids = Drupal::entityQuery('file')->accessCheck(FALSE)->execute();
+	
+	//Obtenim el servei que ens ajudarà a determinar si cada fitxer està en ús o bé està orfe
+	$file_usage = Drupal::service('file.usage');
+	
+	//Recorrem tots els fitxers per la seva fid (identificador de fitxer)
+  	foreach ($fids as $fid) {
+		
+		//A partir del fid obtenim l'entitat del fitxer
+		$file = Drupal\file\Entity\File::load($fid);
+
+		//Obtenim l'atribut del fitxer que ens indicarà si el fitxer està essent usat per alguna entitat/node
+		$usage = $file_usage->listUsage($file);
+
+		//Si el valor = 0, significarà que no està essent usant i que per tant es pot eliminar
+		if (count($usage) == 0) {
+			
+			$file_name = $file->getFilename();
+			\Drupal::logger('encapsulator')->notice('El fitxer ' . $file_name . ' és orfe.');
+			
+				try {
+		
+					//Eliminem el fitxer
+					$file->delete();
+					
+					\Drupal::logger('encapsulator')->notice('El fitxer ' . $file_name . ' ha estat eliminat.');
+
+				} catch(Exception $e) {
+					\Drupal::logger('encapsulator')->error('Hi hagut un problema intentant eliminar el fitxer ' . $file_name . $e->getMessage());
+				}
+
+		}
+	  	
+	}
+	
+	\Drupal::logger('encapsulator')->notice('### FI DEL PROCÉS PER ELIMINAR FITXERS ORFES ###');
+	
+	
+	//Esborrarem els subdirectoris 'locucions' que estiguin sense arxius
+	$path_locucions = '/home/locutor/encapsulador/locucions';
+	netejar_subdirectori($path_locucions);
+	
+	//Esborrarem els subdirectoris 'capsules' que estiguin sense arxius
+	$path_capsules = '/home/locutor/encapsulador/capsules';
+	netejar_subdirectori($path_capsules);
+
+	
+}
+
+/**
+ * Implements hook_entity_insert().
+ */
+function encapsulator_entity_insert(EntityInterface $entity) {
 		
 	if ($entity->getEntityTypeId() == 'node') {
 		
 		switch ($entity->bundle()) {
 			case 'capsula':
 				
-				//kint($entity->bundle());
-				
-				\Drupal::logger('encapsulator')->notice('INICI DEL PROCÉS!');
-				
-				
-				//Constants per poder generar els paths del sistema on es troben els fitxers
-				$path = '/home/locutor/encapsulador/';
-				$prefix_private = 'private://';
-				$tmp = \Drupal::service('file_system')->getTempDirectory() . '/';
-				
-				//Obtenim el camp on hi ha el fitxer de locució (veu del locutor)
-				$locucio_id = $entity->get('field_capsula_locucio')->getValue()[0]['target_id'];
-				
-				//Obtenim l'objecte que representa la locució
-				$file_locucio = \Drupal::entityTypeManager()->getStorage('file')->load($locucio_id);
-				
-				$locucio_path_relative = ltrim($file_locucio->getFileUri(), $prefix_private);
-				$locucio_path_absolute = $path . $locucio_path_relative;
-				
-				//kint($locucio_path_absolute);
-				
-				
+				try {
 
-				//Obtenim el camp on hi ha el terme de taxonomia
-				//kint($entity->get('field_capsula_tipus_de_capsula')->getValue()[0]['target_id']);
-				$intro_term_id = $entity->get('field_capsula_tipus_de_capsula')->getValue()[0]['target_id'];
-				$intro_term = \Drupal\taxonomy\Entity\Term::load($intro_term_id);
-				//kint($intro_term);
-				
-				//Obtenim el camp on hi ha el fitxer d'audio d'intro (que es troba com a camp en el terme de taxonomia)
-				//kint($intro_term->get('field_tipus_de_capsula_audio')->getValue()[0]['target_id']);
-				$intro_id = $intro_term->get('field_tipus_de_capsula_audio')->getValue()[0]['target_id'];
-				
-				//Obtenin l'objecte que representa l'audio de l'intro
-				$file_intro = \Drupal::entityTypeManager()->getStorage('file')->load($intro_id);
-				$intro_path_relative = str_replace($prefix_private, '', $file_intro->getFileUri());
-				$intro_path_absolute = $path . $intro_path_relative;
-				
-				//kint($intro_path_absolute);
-					
-				
-				
-				//Obtenim el camp on hi ha el terme de taxonomia
-				//kint($entity->get('field_capsula_tipus_de_final')->getValue()[0]['target_id']);
-				$outro_term_id = $entity->get('field_capsula_tipus_de_final')->getValue()[0]['target_id'];
-				$outro_term = \Drupal\taxonomy\Entity\Term::load($outro_term_id);
-				//kint($outro_term);
-				
-				//Obtenim el camp on hi ha el fitxer d'audio d'outro (que es troba com a camp en el terme de taxonomia)
-				//kint($outro_term->get('field_tipus_de_final_audio')->getValue()[0]['target_id']);
-				$outro_id = $outro_term->get('field_tipus_de_final_audio')->getValue()[0]['target_id'];
-				
-				//Obtenin l'objecte que representa l'audio de l'outro
-				$file_outro = \Drupal::entityTypeManager()->getStorage('file')->load($outro_id);
-				$outro_path_relative = str_replace($prefix_private, '', $file_outro->getFileUri());
-				$outro_path_absolute = $path . $outro_path_relative;
-				
-				//kint($outro_path_absolute);
+					//kint($entity->bundle());
 
-				
-				//Ara que ja tenim els 3 fitxers d'àudio necessaris els processarem amb la llibreria FFMpeg
-				$resultat_final = true;
-				
-				//Generem els directoris temporals de les parts
-				$uuid = \Drupal::service('uuid');
-				$uuid_tmp = $uuid->generate();
-				$intro_path_tmp = $tmp . $uuid_tmp . '_intro.mp3';
-				$locucio_path_tmp = $tmp . $uuid_tmp . '_locucio.mp3';
-				$outro_path_tmp = $tmp . $uuid_tmp . '_outro.mp3';
-				$resultat_tmp = $tmp . $uuid_tmp . '_resultat.mp3'; //'/var/www/html/encapsulador/web/modules/custom/encapsulator/units.mp3'
-				
-				//Convertim/codifiquem els 3 fitxers en MP3
-				$resultat1 = convertir_a_mp3($intro_path_absolute, $intro_path_tmp);
-				$resultat2 = convertir_a_mp3($locucio_path_absolute, $locucio_path_tmp);
-				$resultat3 = convertir_a_mp3($outro_path_absolute, $outro_path_tmp);
-				
-				if ($resultat1 && $resultat2 && $resultat3) {
+					\Drupal::logger('encapsulator')->notice('### INICI DEL PROCÉS GENERACIÓ DE LA CÀPSULA ###');
+
+
+					//Constants per poder generar els paths del sistema on es troben els fitxers
+					$path = '/home/locutor/encapsulador/';
+					$prefix_private = 'private://';
+					$fileSystem = \Drupal::service('file_system');
+					$tmp = $fileSystem->getTempDirectory() . '/';
 					
-					//Unim els 3 fitxers en un de sol
-					$resultat_unir = unir_parts($intro_path_tmp, $locucio_path_tmp, $outro_path_tmp, $resultat_tmp);
+					//Generem la ruta on guardarem la capsula resultant que es generarà
+					$capsula_path_absolute_final = $prefix_private . 'capsules/' . $entity->id() . '/';
 					
-					if ($resultat_unir) {
-						
-						//Validem que el fitxer resultant s'ha generat correctament
-						if (validar_resultat($resultat_tmp)) {
-							\Drupal::logger('encapsulator')->notice('FI DEL PROCÉS CORRECTE!');
+					//Generarem la ruta on guardarem la locució al final del procés
+					$locucio_path_absolute_final = $prefix_private . 'locucions/' . $entity->id() . '/';
+
+					//Obtenim el camp on hi ha el fitxer de locució (veu del locutor)
+					$locucio_id = $entity->get('field_capsula_locucio')->getValue()[0]['target_id'];
+					$locucio_file = Drupal\file\Entity\File::load($locucio_id);
+
+					//Obtenim l'objecte que representa la locució
+					$file_locucio = \Drupal::entityTypeManager()->getStorage('file')->load($locucio_id);
+					
+					$locucio_path_relative = ltrim($file_locucio->getFileUri(), $prefix_private);
+					$locucio_path_absolute = $path . $locucio_path_relative;
+					
+
+					//kint($locucio_path_absolute);
+
+
+					//Obtenim el camp on hi ha el terme de taxonomia
+					//kint($entity->get('field_capsula_tipus_de_capsula')->getValue()[0]['target_id']);
+					$intro_term_id = $entity->get('field_capsula_tipus_de_capsula')->getValue()[0]['target_id'];
+					$intro_term = \Drupal\taxonomy\Entity\Term::load($intro_term_id);
+					//kint($intro_term);
+
+					//Obtenim el camp on hi ha el fitxer d'audio d'intro (que es troba com a camp en el terme de taxonomia)
+					//kint($intro_term->get('field_tipus_de_capsula_audio')->getValue()[0]['target_id']);
+					$intro_id = $intro_term->get('field_tipus_de_capsula_audio')->getValue()[0]['target_id'];
+
+					//Obtenin l'objecte que representa l'audio de l'intro
+					$file_intro = \Drupal::entityTypeManager()->getStorage('file')->load($intro_id);
+					$intro_path_relative = str_replace($prefix_private, '', $file_intro->getFileUri());
+					$intro_path_absolute = $path . $intro_path_relative;
+
+					//kint($intro_path_absolute);
+
+
+
+					//Obtenim el camp on hi ha el terme de taxonomia
+					//kint($entity->get('field_capsula_tipus_de_final')->getValue()[0]['target_id']);
+					$outro_term_id = $entity->get('field_capsula_tipus_de_final')->getValue()[0]['target_id'];
+					$outro_term = \Drupal\taxonomy\Entity\Term::load($outro_term_id);
+					//kint($outro_term);
+
+					//Obtenim el camp on hi ha el fitxer d'audio d'outro (que es troba com a camp en el terme de taxonomia)
+					//kint($outro_term->get('field_tipus_de_final_audio')->getValue()[0]['target_id']);
+					$outro_id = $outro_term->get('field_tipus_de_final_audio')->getValue()[0]['target_id'];
+
+					//Obtenin l'objecte que representa l'audio de l'outro
+					$file_outro = \Drupal::entityTypeManager()->getStorage('file')->load($outro_id);
+					$outro_path_relative = str_replace($prefix_private, '', $file_outro->getFileUri());
+					$outro_path_absolute = $path . $outro_path_relative;
+
+					//kint($outro_path_absolute);
+
+
+					//Ara que ja tenim els 3 fitxers d'àudio necessaris els processarem amb la llibreria FFMpeg
+					$resultat_final = true;
+
+					//Generem els directoris temporals de les parts
+					$uuid = \Drupal::service('uuid');
+					$uuid_tmp = $uuid->generate();
+					$intro_path_tmp = $tmp . $uuid_tmp . '_intro.mp3';
+					$locucio_path_tmp = $tmp . $uuid_tmp . '_locucio.mp3';
+					$outro_path_tmp = $tmp . $uuid_tmp . '_outro.mp3';
+					$resultat_tmp = $tmp . $uuid_tmp . '_resultat.mp3'; //'/var/www/html/encapsulador/web/modules/custom/encapsulator/units.mp3'
+
+					//Convertim/codifiquem els 3 fitxers en MP3
+					$resultat1 = convertir_a_mp3($intro_path_absolute, $intro_path_tmp);
+					$resultat2 = convertir_a_mp3($locucio_path_absolute, $locucio_path_tmp);
+					$resultat3 = convertir_a_mp3($outro_path_absolute, $outro_path_tmp);
+
+					if ($resultat1 && $resultat2 && $resultat3) {
+
+						//Unim els 3 fitxers en un de sol
+						$resultat_unir = unir_parts($intro_path_tmp, $locucio_path_tmp, $outro_path_tmp, $resultat_tmp);
+
+						if ($resultat_unir) {
+
+							//Validem que el fitxer resultant s'ha generat correctament
+							if (validar_resultat($resultat_tmp)) {
+								\Drupal::logger('encapsulator')->notice('OK en la generació de la càpsula.');
+							} else {
+								$resultat_final = false;
+							}
+
 						} else {
 							$resultat_final = false;
 						}
-						
+
 					} else {
 						$resultat_final = false;
 					}
-					
-				} else {
-					$resultat_final = false;
-				}
-				
-				if (!$resultat_final) {
-					\Drupal::logger('encapsulator')->error('FI DEL PROCÉS INCORRECTE!');
-				}
-				
-				//Guardem el fitxer de la capsula resultant final en el camp del node
-				$handle = fopen($resultat_tmp, 'r');
-				$fileRepository = \Drupal::service('file.repository');
-				$file = $fileRepository->writeData(fread($handle, filesize($resultat_tmp)), $prefix_private . 'resultat.mp3', FileSystemInterface::EXISTS_REPLACE);
-				fclose($handle);
-				
-				//Un cop guardat el fitxer al directori final i creada la seva entitat dins del sistema Drupal, el vincularem l'entitat/node que toqui
-				//$entity_storage = \Drupal::entityTypeManager()->getStorage('node');
-				//$entity = $entity_storage->load(1);
-				$entity->set('field_capsula_generada', $file);
-				//$entity->save(); //Si cridem aquesta funció dins del hook_entity_presave() generarem una crida recursiva en aquest hook que no acabarà mai
-				
-				\Drupal::logger('encapsulator')->notice('### PROCÉS COMPLETAT COMPLETAMENT ###');
 
-				
+					if (!$resultat_final) {
+						throw new Exception('ERROR en la generació de la càpsula');
+					}
+
+					//Comprovem si el directori de destí de la càpsula existeix, en cas que no existeixi el crearem
+					if (!$fileSystem->prepareDirectory($capsula_path_absolute_final, FileSystemInterface::CREATE_DIRECTORY)) {
+						throw new Exception('ERROR en generar el directori: ' . $capsula_path_absolute_final);
+					}
+					
+					//Guardem el fitxer de la capsula resultant final en el camp del node
+					$handle = fopen($resultat_tmp, 'r');
+					$fileRepository = \Drupal::service('file.repository');
+					$file = $fileRepository->writeData(fread($handle, filesize($resultat_tmp)), $capsula_path_absolute_final . $entity->id() . '.mp3', FileSystemInterface::EXISTS_REPLACE);
+					fclose($handle);
+
+					//Un cop guardat el fitxer al directori final i creada la seva entitat dins del sistema Drupal, el vincularem l'entitat/node que toqui
+					//$entity_storage = \Drupal::entityTypeManager()->getStorage('node');
+					//$entity = $entity_storage->load(1);
+					$entity->set('field_capsula_generada', $file);
+					
+					
+					//Si el fitxer d'àudio de la locució no està guardada dins d'un subdirectori amb l'identificador del node, ho farem ara
+					
+					//Comprovem si el directori de destí de la locució existeix, en cas que no existeixi el crearem
+					if (!$fileSystem->prepareDirectory($locucio_path_absolute_final, FileSystemInterface::CREATE_DIRECTORY)) {
+						throw new Exception('ERROR en generar el directori: ' . $locucio_path_absolute_final);
+					}
+					
+					//Desplaçarem/mourem el fitxer de la locució dins del subdirectori
+					$fileRepository->move($locucio_file , $locucio_path_absolute_final . $file_locucio->getFilename() , FileSystemInterface::EXISTS_REPLACE);
+					
+					
+					
+					//Guardem els canvis de l'entitat/node
+					$entity->save(); //Si cridem aquesta funció dins del hook_entity_presave() generarem una crida recursiva en aquest hook que no acabarà mai
+					
+					\Drupal::logger('encapsulator')->notice('OK en desar de la càpsula al directori de destí.');
+
+					\Drupal::logger('encapsulator')->notice('### FI DEL PROCÉS GENERACIÓ DE LA CÀPSULA ###');
+
+
+
+				} catch(Exception $e) {
+					\Drupal::logger('encapsulator')->error('ERROR en la generació de la càpsula: ' . $e->getMessage());
+					//Llancem una excepció que provocarà la interrupció de desat del node actual
+					//throw new Exception('ERROR en la generació de la càpsula');
+				}
+
+
+
+
+
 				// 1 - Treure silencis (davant i darrera)
 				// 2 - Unir els 3 fitxers
 				// 3 - Normalitzar el fitxer
 				// 4 - Guardar-ho en el camp del node on es guarda la càpsula generada
-				
+
 				// 5 - Sync/copiar a directori que poden emetre (segons les dates d'inici i fi)
 				// 6 - Eliminar del directori que es poden emetre si la data ha vençut
 				
@@ -210,38 +511,5 @@ function encapsulator_entity_presave(EntityInterface $entity) {
 	}
 	
 	return $entity;
-	
-}
-
-
-/**
- * Implements hook_cron().
- */
-function encapsulator_cron() {
-	
-	//Obtenim tots els identificadors de fitxers
-	$fids = Drupal::entityQuery('file')->execute();
-	
-	//Obtenim el servei que ens ajudarà a determinar si cada fitxer està en ús o bé està orfe
-	$file_usage = Drupal::service('file.usage');
-	
-	//Recorrem tots els fitxers per la seva fid (identificador de fitxer)
-  	foreach ($fids as $fid) {
-	
-	//A partir del fid obtenim l'entitat del fitxer
-    $file = Drupal\file\Entity\File::load($fid);
-	
-	//Obtenim l'atribut del fitxer que ens indicarà si el fitxer està essent usat per alguna entitat/node
-    $usage = $file_usage->listUsage($file);
-	  
-    //Si el valor = 0, significarà que no està essent usant i que per tant es pot eliminar
-    if (count($usage) == 0) {
-		
-		//Eliminem el fitxer
-		$file->delete();
-		
-    }
-	  
-  }
 	
 }

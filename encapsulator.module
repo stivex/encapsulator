@@ -494,6 +494,27 @@ function encapsulator_entity_update(EntityInterface $entity) {
 
 
 /**
+ * Implements hook_form_alter().
+ */
+function encapsulator_form_alter(&$form, \Drupal\Core\Form\FormStateInterface $form_state, $form_id)  {
+	
+	//Si ens trobem en un formulari concret, ocultarem determinats elements
+	if($form_id == 'node_capsula_form' || $form_id == 'node_capsula_edit_form') {
+		
+		//Ocultem l'apartat que permet crear revisions/versions d'un node
+		$form['revision_information']['#access'] = false;
+		
+		//Ocultem el camp "field_capsula_directori_temporal" per l'usuari
+		$form['#attached']['library'][] = 'encapsulator/encapsulator.css';
+		$form['field_capsula_directori_temporal']['#prefix'] = "<div class='hide-field'>";
+		$form['field_capsula_directori_temporal']['#suffix'] = "</div>";
+
+	}
+	
+}
+
+
+/**
  * Implements hook_cron().
  */
 function encapsulator_cron() {

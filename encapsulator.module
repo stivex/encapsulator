@@ -170,7 +170,6 @@ function generar_capsula(EntityInterface $entity) {
 					//Si el camp 'field_capsula_directori_temporal' del node té valor no deixarem continuar, retornarem directament $entity
 					//Així evitem que quan des del hook_entity_insert o hook_entity_update fem un $entity->save() no s'executarà novament aquesta funció
 					if(!$entity->get('field_capsula_directori_temporal')->isEmpty()) {
-						\Drupal::logger('encapsulator')->notice('ENTRO!!!');
 						$entity->set('field_capsula_directori_temporal', null);
 						return $entity;
 					}
@@ -337,8 +336,24 @@ function generar_capsula(EntityInterface $entity) {
 							throw new Exception('ERROR en generar el directori: ' . $locucio_path_absolute_final);
 						}
 						
+						//Obtenim el nom del fitxer
+						$file_name = $file_locucio->getFilename(); //strtolower($file_locucio->getFilename());
+						
+						//Comprovem si l'extensió del fitxer és ".opus" ("opus" és un còdec d'àudio, mentre que "ogg" és un contenidor d'àudio que suporta entre d'altres el "opus")
+						if (str_ends_with($file_name, '.opus')) { 
+							//L'extensió del fitxer és ".opus", la canviarem per "ogg"
+							$file_name = rtrim($file_name, '.opus') . '.ogg';
+						}
+						
 						//Desplaçarem/mourem el fitxer de la locució dins del subdirectori
-						$fileRepository->move($locucio_file , $locucio_path_absolute_final . $file_locucio->getFilename() , FileSystemInterface::EXISTS_REPLACE);
+						\Drupal::logger('encapsulator')->notice('file_name: ' . $file_name);
+						$file_entity = $fileRepository->move($locucio_file , $locucio_path_absolute_final . $file_name , FileSystemInterface::EXISTS_REPLACE);
+						
+						//Modifiquem el nom de l'entitat que representa el fitxer de la locució
+						$file_entity->setFilename($file_name);
+						$file_entity->save();
+						
+						$entity->set('field_capsula_locucio', $file_entity);
 						
 					}
 					
@@ -434,9 +449,25 @@ function encapsulator_entity_insert(EntityInterface $entity) {
 					if (!$fileSystem->prepareDirectory($locucio_path_absolute_final, FileSystemInterface::CREATE_DIRECTORY)) {
 						throw new Exception('ERROR en generar el directori: ' . $locucio_path_absolute_final);
 					}
+					
+					//Obtenim el nom del fitxer
+					$file_name = $file_locucio->getFilename(); //strtolower($file_locucio->getFilename());
+
+					//Comprovem si l'extensió del fitxer és ".opus" ("opus" és un còdec d'àudio, mentre que "ogg" és un contenidor d'àudio que suporta entre d'altres el "opus")
+					if (str_ends_with($file_name, '.opus')) { 
+						//L'extensió del fitxer és ".opus", la canviarem per "ogg"
+						$file_name = rtrim($file_name, '.opus') . '.ogg';
+					}
 
 					//Desplaçarem/mourem el fitxer de la locució dins del subdirectori
-					$fileRepository->move($locucio_file , $locucio_path_absolute_final . $file_locucio->getFilename() , FileSystemInterface::EXISTS_REPLACE);
+					\Drupal::logger('encapsulator')->notice('file_name: ' . $file_name);
+					$file_entity = $fileRepository->move($locucio_file , $locucio_path_absolute_final . $file_name , FileSystemInterface::EXISTS_REPLACE);
+					
+					//Modifiquem el nom de l'entitat que representa el fitxer de la locució
+					$file_entity->setFilename($file_name);
+					$file_entity->save();
+					
+					$entity->set('field_capsula_locucio', $file_entity);
 
 					/************************************************************
 					* Modifiquem el directori on es troba l'arxiu de la càpsula *

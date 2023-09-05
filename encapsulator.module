@@ -45,13 +45,121 @@ function convertir_a_mp3($audio_origen, $audio_desti) {
 }
 
 /**
+ * Funció que s'encarrega de treure els possibles silencis de l'inici i final del fitxer d'àudio
+ */
+function retallar_silencis(&$filters) {
+	
+	$filters->custom('silenceremove=start_periods=1:start_duration=1:start_threshold=-60dB:detection=peak,aformat=dblp,areverse,silenceremove=start_periods=1:start_duration=1:start_threshold=-60dB:detection=peak,aformat=dblp,areverse');
+	
+}
+
+/**
+ * Funció que s'encarrega de normalitzar el fitxer d'àudio
+ */
+function normalitzar(&$filters, $entity) {
+	
+	//Filtre de normalització
+	$filters->custom('loudnorm');
+	
+	//Filtre de volum
+	if (!$entity->get('field_capsula_volum')->isEmpty()) {
+		$filters->custom('volume=' . $entity->get('field_capsula_volum')->value . 'dB');
+	}
+	
+}
+
+/**
+ * Funció que s'encarrega d'afegir metadades al fitxer d'àudio
+ */
+function afegir_metadata(&$filters, $entity) {
+	
+	$filters->addMetadata(['title' => 'PROVES DE METADADES', 'track' => 107]);
+	//$filters->addMetadata(["title" => $entity->getTitle(), "track" => 107]);
+	
+}
+
+/**
+ * AQUESTA FUNCIÓ ES PODRÀ ELIMINAR, NOMÉS ÉS DE REFERÈNCIA PERÒ EL SEU CODI FUNCIONA CORRECTAMENT
+ */
+function retallar_silencis_proves() {
+
+	$file_entrada = '/home/locutor/encapsulador/locucions/61/PTT-20230820-WA0000.ogg';
+	$file_sortida = '/home/locutor/encapsulador/locucions/61/sortida.mp3';
+
+	$ffmpeg = FFMpeg\FFMpeg::create();
+	
+	$audio = $ffmpeg->open($file_entrada);
+	
+	//$audio->filters()->custom('silenceremove=stop_periods=-1:stop_duration=1:stop_threshold=-90dB');
+	$audio->filters()
+		->custom('silenceremove=start_periods=1:start_duration=1:start_threshold=-60dB:detection=peak,aformat=dblp,areverse,silenceremove=start_periods=1:start_duration=1:start_threshold=-60dB:detection=peak,aformat=dblp,areverse')
+		->addMetadata(['title' => 'PROVES DE METADADES', 'track' => 107]);
+
+	$format = new FFMpeg\Format\Audio\Mp3();
+	//$format = new FFMpeg\Format\Audio\Flac();
+	
+	$format
+		->setAudioChannels(2)
+		->setAudioKiloBitrate(256);
+	
+	$audio->save($format, $file_sortida);
+	
+}
+
+/**
  * Funció que s'encarrega d'unir 3 fitxers d'àudio en un de sol
  */
-function unir_parts($audio_intro, $audio_locucio, $audio_outro, $audio_desti, $entity) {
+function unir_parts($audio_intro, $audio_locucio, $audio_outro, $audio_desti, $grafica_tmp, $entity, $tmp_uuid) {
 
 	try {
 		
+		\Drupal::logger('encapsulator')->notice('field_capsula_normalitzar: ' . $entity->get('field_capsula_normalitzar')->value);
+		\Drupal::logger('encapsulator')->notice('field_capsula_treure_silencis: ' . $entity->get('field_capsula_treure_silencis')->value);
+		
+		/***********************************************
+		* Abans d'unir, aplicarem filtres a la locució *
+		************************************************/
+		
+		//Creem una instància de la llibreria PHP-FFMpeg
 		$ffmpeg = FFMpeg\FFMpeg::create();
+		
+		//Només en cas que l'usuari ens hagi indicat almenys algun tipus de filtre a aplicar...
+		if ($entity->get('field_capsula_normalitzar')->value == 1 || $entity->get('field_capsula_treure_silencis')->value == 1) {
+			
+			//Obrim un fitxer
+			$audio = $ffmpeg->open($audio_locucio);
+
+			//Obtenim el contenidor de filtres (a dins seu hi indicarem quins filtres hi voldrem aplicar (normalitzar, treure silencis...)
+			$filters = $audio->filters();
+
+			//Determinem si l'usuari vol normalitzar el fitxer de la locució
+			if ($entity->get('field_capsula_normalitzar')->value == 1) {
+				\Drupal::logger('encapsulator')->notice('Es normalitzarà la locució: ' . $audio_locucio);
+				normalitzar($filters, $entity);
+			}
+
+			//Determinem si l'usuari vol eliminar els silencis d'inici i final del fitxer de la locució
+			if ($entity->get('field_capsula_treure_silencis')->value == 1) {
+				\Drupal::logger('encapsulator')->notice('Es treuran els silencis de la locució: ' . $audio_locucio);
+				retallar_silencis($filters);
+			}
+
+			$format = new FFMpeg\Format\Audio\Mp3();
+
+			$format
+				->setAudioChannels(2)
+				->setAudioKiloBitrate(192);
+
+			$audio_locucio = $tmp_uuid . '_locucio_filtres.mp3';
+			$audio->save($format, $audio_locucio);
+			
+		}
+		
+		/***********************************************
+		* Un cop aplicats els filtres unirem les parts *
+		***********************************************/
+		
+		//Obrim un fitxer
 		$video = $ffmpeg->open($audio_intro);
 		
 		//Unim les parts
@@ -60,19 +168,33 @@ function unir_parts($audio_intro, $audio_locucio, $audio_outro, $audio_desti, $e
 			->saveFromSameCodecs($audio_desti, false);
 		
 		
-		//Afegim metadata al fitxer
-		$ffmpeg_metadata = FFMpeg\FFMpeg::create();
-		$audio = $ffmpeg_metadata->open($audio_desti);
-		$audio->filters()->addMetadata(["title" => $entity->getTitle(), "track" => 107]);
-		//$audio->filters()->addMetadata(["title" => $entity->getTitle(), "track" => 107]);
-		/*
-		$format_audio = new FFMpeg\Format\Audio\Mp3();
-		$format_audio
-					->setAudioChannels(2)
-					->setAudioKiloBitrate(192);
+		/**************************************************
+		* Un cop unides les parts, afegirem les metadades *
+		**************************************************/
+
+		//Obrim un fitxer
+		$audio = $ffmpeg->open($audio_desti);
 		
-		$audio->save($format_audio, $audio_desti);
-		*/
+		$filters = $audio->filters();
+		
+		afegir_metadata($filters, $entity);
+		
+		$format = new FFMpeg\Format\Audio\Mp3();
+		
+		$format
+			->setAudioChannels(2)
+			->setAudioKiloBitrate(192);
+		
+		$audio_desti = $tmp_uuid . '_resultat_metadades.mp3';
+		$audio->save($format, $audio_desti);
+		
+		
+		/*****************************************************
+		* Generem la gràfica de la forma d'ona de la capsula *
+		*****************************************************/
+		$waveform = $audio->waveform(640, 120, array('#000000'));
+		$waveform->save($grafica_tmp);
+		
 		
 		\Drupal::logger('encapsulator')->notice('Unió completada, arxiu guardat a: ' . $audio_desti);
 		
@@ -270,10 +392,12 @@ function generar_capsula(EntityInterface $entity) {
 
 					//Generem els directoris temporals de les parts
 					$uuid_tmp = $uuid->generate();
-					$intro_path_tmp = $tmp . $uuid_tmp . '_intro.mp3';
-					$locucio_path_tmp = $tmp . $uuid_tmp . '_locucio.mp3';
-					$outro_path_tmp = $tmp . $uuid_tmp . '_outro.mp3';
-					$resultat_tmp = $tmp . $uuid_tmp . '_resultat.mp3';
+					$tmp_uuid = $tmp . $uuid_tmp;
+					$intro_path_tmp = $tmp_uuid . '_intro.mp3';
+					$locucio_path_tmp = $tmp_uuid . '_locucio.mp3';
+					$outro_path_tmp = $tmp_uuid . '_outro.mp3';
+					$resultat_tmp = $tmp_uuid . '_resultat.mp3';
+					$grafica_tmp = $tmp_uuid . '_grafica.png';
 
 					//Convertim/codifiquem els 3 fitxers en MP3
 					$resultat1 = convertir_a_mp3($intro_path_absolute, $intro_path_tmp);
@@ -283,7 +407,7 @@ function generar_capsula(EntityInterface $entity) {
 					if ($resultat1 && $resultat2 && $resultat3) {
 
 						//Unim els 3 fitxers en un de sol
-						$resultat_unir = unir_parts($intro_path_tmp, $locucio_path_tmp, $outro_path_tmp, $resultat_tmp, $entity);
+						$resultat_unir = unir_parts($intro_path_tmp, $locucio_path_tmp, $outro_path_tmp, $resultat_tmp, $grafica_tmp, $entity, $tmp_uuid);
 
 						if ($resultat_unir) {
 
@@ -319,6 +443,14 @@ function generar_capsula(EntityInterface $entity) {
 
 					//Un cop guardat el fitxer al directori final i creada la seva entitat dins del sistema Drupal, el vincularem l'entitat/node que toqui
 					$entity->set('field_capsula_generada', $file);
+					
+					//Guardem el fitxer de la grafica
+					$handle = fopen($grafica_tmp, 'r');
+					$file_grafica = $fileRepository->writeData(fread($handle, filesize($grafica_tmp)), $capsula_path_absolute_final . $id . '.png', FileSystemInterface::EXISTS_REPLACE);
+					fclose($handle);
+
+					//Un cop guardat el fitxer al directori final i creada la seva entitat dins del sistema Drupal, el vincularem l'entitat/node que toqui
+					$entity->set('field_capsula_grafica', $file_grafica);
 					
 					
 					//Si el fitxer d'àudio de la locució no està guardada dins d'un subdirectori (que tingui com a nom l'identificador del node), ho farem ara
@@ -493,9 +625,32 @@ function encapsulator_entity_insert(EntityInterface $entity) {
 					$file_entity->setFilename($id_def . '.mp3');
 					$file_entity->save();
 
-					//Deixem el camp 'field_capsula_directori_temporal' buit per indicar que aquest node ja no necessita cap directori temporal
-					//$entity->set('field_capsula_directori_temporal', null);
+					/************************************************************
+					* Modifiquem el directori on es troba l'arxiu de la gràfica *
+					************************************************************/
 
+					//Obtenim l'identificado del fitxer de la gràfica
+					$fid_grafica = $entity->get('field_capsula_grafica')->getValue()[0]['target_id'];
+					$grafica_file = Drupal\file\Entity\File::load($fid_grafica);
+					$file_grafica = \Drupal::entityTypeManager()->getStorage('file')->load($fid_grafica);
+
+					//Generem la ruta de destí on haurem de moure el fitxer
+					$grafica_path_absolute_final = generar_path_absolute_final_capsula($id_def);
+
+					//Verifiquem que la ruta de destí exisiteix, en cas que no existeixi, la crearem
+					if (!$fileSystem->prepareDirectory($grafica_path_absolute_final, FileSystemInterface::CREATE_DIRECTORY)) {
+						throw new Exception('ERROR en generar el directori: ' . $grafica_path_absolute_final);
+					}
+
+					//Desplaçarem/mourem el fitxer de la gràfica dins del subdirectori
+					$file_entity = $fileRepository->move($grafica_file , $grafica_path_absolute_final . $id_def . '.png' , FileSystemInterface::EXISTS_REPLACE);
+
+					//Modifiquem el nom de l'entitat que representa el fitxer de la gràfica
+					$file_entity->setFilename($id_def . '.png');
+					$file_entity->save();
+
+					
+					
 					//Guardem els canvis de l'entitat (això provocarà que es torni a llançar el hook_entity_presave, però no s'executarà el codi de la funció generar_capsula($entity) )
 					$entity->save();
 
@@ -549,6 +704,8 @@ function encapsulator_form_alter(&$form, \Drupal\Core\Form\FormStateInterface $f
  * Implements hook_cron().
  */
 function encapsulator_cron() {
+	
+	retallar_silencis_proves();
 	
 	\Drupal::logger('encapsulator')->notice('### INICI DEL PROCÉS PER ELIMINAR FITXERS ORFES ###');
 	

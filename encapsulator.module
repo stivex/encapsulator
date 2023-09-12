@@ -8,6 +8,7 @@ function get_path() {
 	return '/home/locutor/encapsulador/';
 }
 
+
 function get_prefix_private() {
 	return 'private://';
 }
@@ -45,6 +46,7 @@ function convertir_a_flac($audio_origen, $audio_desti) {
 	
 }
 
+
 /**
  * Funció que s'encarrega de convertir un audio a MP3
  */
@@ -76,6 +78,7 @@ function convertir_a_mp3($audio_origen, $audio_desti) {
 	}
 	
 }
+
 
 /**
  * Funció que ens diu quin és el pic màxim de volum que arriba un fitxer
@@ -279,6 +282,7 @@ function unir_parts($audio_intro, $audio_locucio, $audio_outro, &$audio_desti, $
 	
 }
 
+
 /**
  * Funció que valida que un fitxer d'àudio ha estat generat correctament
  */
@@ -297,12 +301,134 @@ function validar_resultat($audio_a_validar) {
 }
 
 /**
+ * Sincronitzem (copiem dins del directori './capsules/programades' les càpsules que s'han de poder emetre a l'hora actual que ens trobem
+ */
+function sincronitzar_capsules($path) {
+	
+	/********************************************************************************
+	* Esborrarem tots els fitxers/càpsules que contingui el directori 'programades' *
+	********************************************************************************/
+
+	//Obtenim una llista de fitxers que es troben en el directori
+	$fitxers = glob($path . '/*'); 
+
+	//Esborrarem tots els fitxers de la llista obtinguda
+	foreach($fitxers as $fitxer) {
+
+		//Comprovem que sigui realment un fitxer
+		if(is_file($fitxer)) {
+			//Esborrem el fitxer de disc
+			unlink($fitxer); 
+		}
+
+	}
+	
+	
+	/************************************************************************
+	* Consultarem quines càpsules cal copiar dins del directori 'programades' *
+	*************************************************************************/
+	
+	//Creem una query per poder fer la consulta
+	$query = \Drupal::entityTypeManager()->getStorage('node')->getQuery();
+	
+	//Que tingui en compte tant els nodes/elements que pot, com també els que no pot veure l'usuari
+	$query->accessCheck(FALSE);
+	
+	//Aquells elements que es trobin publicats
+	$query->condition('status', 1);
+	
+	//Que el tipus de contingut sigui 'capsula'
+	$query->condition('type', 'capsula');
+	
+	//Que es trobi la seva data d'emissió entre la data d'inici i fi respecte l'hora actual que estem
+	//...
+	
+	//Executem la consulta i obtenim una llista de nodes de tipus 'capsula' (haurem de consultar el seu camp on es guarda la càpsules que caldrà copiar)
+	$nodes_id = $query->execute();
+	
+	/**************************************************************************
+	* Copiem les càpsules que s'han d'emetre dins del directori 'programades' *
+	***************************************************************************/
+	
+	$storage = \Drupal::entityTypeManager()->getStorage('node');
+	
+	$path_origen = get_path() . 'capsules/';
+	$path_desti = $path . '/';
+	
+	
+	foreach ($nodes_id as $node_id) {
+		
+		//A partir de la ID del node, obtenim l'objecte
+		$node = $storage->load($node_id);
+		
+		//Obtenim l'identificador del fitxer de la càpsula del node
+		$fid = $node->get('field_capsula_generada')->getValue()[0]['target_id'];
+		
+		//A partir del fid obtenim l'entitat del fitxer
+		$fitxer = Drupal\file\Entity\File::load($fid);
+		
+		//Copiem el fitxer dins del directori 'programades'
+		copy($path_origen . $node_id . '/' . $fitxer->getFilename(), $path_desti . $fitxer->getFilename());
+		
+		\Drupal::logger('encapsulator')->notice('S\'ha programat la càpsula: ' . $fitxer->getFilename());
+		
+    }
+	
+	
+}
+
+
+/**
+ * Esborrarem de disc tots aquells fitxers que ja no formin part de cap entitat/node
+ */
+function netejar_fitxers() {
+	
+	//Obtenim tots els identificadors de fitxers
+	$fids = Drupal::entityQuery('file')->accessCheck(FALSE)->execute();
+	
+	//Obtenim el servei que ens ajudarà a determinar si cada fitxer està en ús o bé està orfe
+	$file_usage = Drupal::service('file.usage');
+	
+	//Recorrem tots els fitxers per la seva fid (identificador de fitxer)
+  	foreach ($fids as $fid) {
+		
+		//A partir del fid obtenim l'entitat del fitxer
+		$file = Drupal\file\Entity\File::load($fid);
+
+		//Obtenim l'atribut del fitxer que ens indicarà si el fitxer està essent usat per alguna entitat/node
+		$usage = $file_usage->listUsage($file);
+
+		//Si el valor = 0, significarà que no està essent usant i que per tant es pot eliminar
+		if (count($usage) == 0) {
+			
+			$file_name = $file->getFilename();
+			\Drupal::logger('encapsulator')->notice('El fitxer ' . $file_name . ' és orfe.');
+			
+				try {
+		
+					//Eliminem el fitxer
+					$file->delete();
+					
+					\Drupal::logger('encapsulator')->notice('El fitxer ' . $file_name . ' ha estat eliminat.');
+
+				} catch(Exception $e) {
+					\Drupal::logger('encapsulator')->error('Hi hagut un problema intentant eliminar el fitxer ' . $file_name . $e->getMessage());
+				}
+
+		}
+	  	
+	}
+	
+}
+
+
+/**
  * Funció que s'encarrega d'eliminar els subdirectoris que no tenen contingut a dins seu (usat pels subdirectoris 'locucions' i 'capsules')
  */
 function netejar_subdirectori($path) {
 
 	//Obtenim els subdirectoris
-	$arr = array_diff(scandir($path), array('..', '.'));
+	$arr = array_diff(scandir($path), array('..', '.', 'programades')); //El directoris '..', '.' i 'programades' no els voldrem tenir en compte, perquè no voldrem que s'esborrin
 
 	foreach ($arr as $value) {
 		
@@ -326,7 +452,6 @@ function netejar_subdirectori($path) {
 }
 
 
-
 /**
  * Funció que genera la ruta absoluta on desar la capsula a partir d'un identificador
  */
@@ -337,6 +462,7 @@ function generar_path_absolute_final_capsula($id) {
 	return $prefix_private . 'capsules/' . $id . '/';
 }
 
+
 /**
  * Funció que genera la ruta absoluta on desar la locució a partir d'un identificador
  */
@@ -346,6 +472,7 @@ function generar_path_absolute_final_locucio($id) {
 	
 	return $prefix_private . 'locucions/' . $id . '/';
 }
+
 
 /**
  * Funció que s'encarrega de tot el procés de generar el fitxer d'àudio de la càpsula
@@ -758,46 +885,19 @@ function encapsulator_form_alter(&$form, \Drupal\Core\Form\FormStateInterface $f
  */
 function encapsulator_cron() {
 	
-	\Drupal::logger('encapsulator')->notice('### INICI DEL PROCÉS PER ELIMINAR FITXERS ORFES ###');
+	\Drupal::logger('encapsulator')->notice('### INICI DE LA SINCRONITZACIÓ DE CÀPSULES ###');
 	
-	//Obtenim tots els identificadors de fitxers
-	$fids = Drupal::entityQuery('file')->accessCheck(FALSE)->execute();
+	//Sincronitzem (copiem dins del directori './capsules/programades' les càpsules que s'han de poder emetre a l'hora actual que ens trobem
+	$path_capsules_programades = '/home/locutor/encapsulador/capsules/programades';
+	sincronitzar_capsules($path_capsules_programades);
 	
-	//Obtenim el servei que ens ajudarà a determinar si cada fitxer està en ús o bé està orfe
-	$file_usage = Drupal::service('file.usage');
+	\Drupal::logger('encapsulator')->notice('### FI DE LA SINCRONITZACIÓ DE CÀPSULES ###');
 	
-	//Recorrem tots els fitxers per la seva fid (identificador de fitxer)
-  	foreach ($fids as $fid) {
-		
-		//A partir del fid obtenim l'entitat del fitxer
-		$file = Drupal\file\Entity\File::load($fid);
-
-		//Obtenim l'atribut del fitxer que ens indicarà si el fitxer està essent usat per alguna entitat/node
-		$usage = $file_usage->listUsage($file);
-
-		//Si el valor = 0, significarà que no està essent usant i que per tant es pot eliminar
-		if (count($usage) == 0) {
-			
-			$file_name = $file->getFilename();
-			\Drupal::logger('encapsulator')->notice('El fitxer ' . $file_name . ' és orfe.');
-			
-				try {
-		
-					//Eliminem el fitxer
-					$file->delete();
-					
-					\Drupal::logger('encapsulator')->notice('El fitxer ' . $file_name . ' ha estat eliminat.');
-
-				} catch(Exception $e) {
-					\Drupal::logger('encapsulator')->error('Hi hagut un problema intentant eliminar el fitxer ' . $file_name . $e->getMessage());
-				}
-
-		}
-	  	
-	}
 	
-	\Drupal::logger('encapsulator')->notice('### FI DEL PROCÉS PER ELIMINAR FITXERS ORFES ###');
+	\Drupal::logger('encapsulator')->notice('### INICI DEL PROCÉS PER ELIMINAR FITXERS I DIRECTORIS ORFES ###');
 	
+	//Esborrarem de disc tots aquells fitxers que ja no formin part de cap entitat/node
+	netejar_fitxers();
 	
 	//Esborrarem els subdirectoris 'locucions' que estiguin sense arxius
 	$path_locucions = '/home/locutor/encapsulador/locucions';
@@ -806,6 +906,8 @@ function encapsulator_cron() {
 	//Esborrarem els subdirectoris 'capsules' que estiguin sense arxius
 	$path_capsules = '/home/locutor/encapsulador/capsules';
 	netejar_subdirectori($path_capsules);
+	
+	\Drupal::logger('encapsulator')->notice('### FI DEL PROCÉS PER ELIMINAR FITXERS I DIRECTORIS ORFES ###');
 
 	
 }

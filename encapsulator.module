@@ -12,6 +12,39 @@ function get_prefix_private() {
 	return 'private://';
 }
 
+
+/**
+* Funció que s'encarrega de convertir un audio a FLAC
+*/
+function convertir_a_flac($audio_origen, $audio_desti) {
+	
+	try {
+
+		$ffmpeg = FFMpeg\FFMpeg::create();
+		$audio = $ffmpeg->open($audio_origen);
+
+		$format = new FFMpeg\Format\Audio\Flac();
+		$format->on('progress', function ($audio, $format, $percentage) {
+			//\Drupal::logger('encapsulator')->notice('Progrés: ' . $percentage . '%');
+		});
+
+		$format
+			->setAudioChannels(2)
+			->setAudioKiloBitrate(256);
+		
+		$audio->save($format, $audio_desti);
+
+		\Drupal::logger('encapsulator')->notice('Conversió a FLAC completada, arxiu guardat a: ' . $audio_desti);
+
+		return true;
+		
+	} catch(Exception $e) {
+		\Drupal::logger('encapsulator')->error('Hi hagut un error en convertir a FLAC el següent fitxer: ' . $audio_origen . ' ' . $e->getMessage());
+		return false;
+	}
+	
+}
+
 /**
  * Funció que s'encarrega de convertir un audio a MP3
  */
@@ -74,45 +107,11 @@ function obtenir_pic_maxim($fitxer, $aplicar_normalitzacio) {
 
 }
 
-/**
- * AQUESTA FUNCIÓ ES PODRÀ ELIMINAR, NOMÉS ÉS DE REFERÈNCIA PERÒ EL SEU CODI FUNCIONA CORRECTAMENT
- */
-function retallar_silencis_proves() {
-
-	$file_entrada = '/home/locutor/encapsulador/locucions/61/65.mp3';
-	$file_sortida = '/home/locutor/encapsulador/locucions/61/sortida.mp3';
-
-	$ffmpeg = FFMpeg\FFMpeg::create();
-	
-	$audio = $ffmpeg->open($file_entrada);
-	
-	//$audio->filters()->custom('silenceremove=stop_periods=-1:stop_duration=1:stop_threshold=-90dB');
-	/*
-	$audio->filters()
-		->custom('loudnorm')
-		->custom('volume=15dB')
-		->custom('silenceremove=start_periods=1:start_duration=1:start_threshold=-60dB:detection=peak,aformat=dblp,areverse,silenceremove=start_periods=1:start_duration=1:start_threshold=-60dB:detection=peak,aformat=dblp,areverse')
-		->addMetadata(['title' => 'PROVES DE METADADES', 'track' => 107]);
-	*/
-	$audio->filters()
-		->custom('loudnorm,volume=15dB,silenceremove=start_periods=1:start_duration=1:start_threshold=-60dB:detection=peak,aformat=dblp,areverse,silenceremove=start_periods=1:start_duration=1:start_threshold=-60dB:detection=peak,aformat=dblp,areverse')
-		->addMetadata(['title' => 'PROVES DE METADADES', 'track' => 107]);
-	
-	$format = new FFMpeg\Format\Audio\Mp3();
-	//$format = new FFMpeg\Format\Audio\Flac();
-	
-	$format
-		->setAudioChannels(2)
-		->setAudioKiloBitrate(256);
-	
-	$audio->save($format, $file_sortida);
-	
-}
 
 /**
  * Funció que s'encarrega d'unir 3 fitxers d'àudio en un de sol
  */
-function unir_parts($audio_intro, $audio_locucio, $audio_outro, $audio_desti, $grafica_tmp, $entity, $tmp_uuid) {
+function unir_parts($audio_intro, $audio_locucio, $audio_outro, &$audio_desti, $grafica_tmp, $entity, $tmp_uuid) {
 
 	try {
 		
@@ -172,15 +171,7 @@ function unir_parts($audio_intro, $audio_locucio, $audio_outro, $audio_desti, $g
 				
 				$llindar = $entity->get('field_capsula_silenci_llindar')->value;
 				
-				//$filtre_silencis = 'silenceremove=start_periods=1:start_duration=1:start_threshold=-60dB:detection=peak,aformat=dblp,areverse,silenceremove=start_periods=1:start_duration=1:start_threshold=-60dB:detection=peak,aformat=dblp,areverse';
-				
 				$filtre_silencis = 'silenceremove=start_periods=1:start_duration=0:start_threshold=' . $llindar . 'dB:detection=peak,aformat=dblp,areverse,silenceremove=start_periods=1:start_duration=0:start_threshold=' . $llindar . 'dB:detection=peak,aformat=dblp,areverse';
-				
-				/*
-				$filtre_silencis .= 'silenceremove=start_periods=1:start_duration=1:start_threshold=40dB:detection=peak';
-				$filtre_silencis .= ',';
-				$filtre_silencis .= 'silenceremove=stop_periods=1:stop_duration=1:stop_threshold=40dB:detection=peak';
-				*/
 				
 			}
 			
@@ -205,19 +196,19 @@ function unir_parts($audio_intro, $audio_locucio, $audio_outro, $audio_desti, $g
 			//Obtenim el contenidor de filtres (a dins seu hi indicarem quins filtres hi voldrem aplicar (normalitzar, treure silencis...)
 			$audio->filters()->custom($filtre_total);
 
-			$format = new FFMpeg\Format\Audio\Mp3();
+			$format = new FFMpeg\Format\Audio\Flac();
 
 			$format
 				->setAudioChannels(2)
-				->setAudioKiloBitrate(192);
+				->setAudioKiloBitrate(256);
 
-			$audio_locucio = $tmp_uuid . '_locucio_filtres.mp3';
+			$audio_locucio = $tmp_uuid . '_locucio_filtres.flac';
 			$audio->save($format, $audio_locucio);
 			
 			//Analitzem la locució un cop aplicats els filtres per determinar si pot existir clipping (picar/saturar l'àudio)
 			$pic_maxim = obtenir_pic_maxim($audio_locucio, false);
 			if ($pic_maxim == 0) {
-				$messenger->addWarning('La locució podria picar/salutar l\'audio, verifica que s\'escolta bé la càpsula i modifica el volum.');
+				$messenger->addWarning('El volum de la locució podria picar/salutar l\'audio, verifica que s\'escolta bé la càpsula.');
 			}
 			
 		}
@@ -242,7 +233,20 @@ function unir_parts($audio_intro, $audio_locucio, $audio_outro, $audio_desti, $g
 		//Obrim un fitxer
 		$audio = $ffmpeg->open($audio_desti);
 		
-		$audio->filters()->addMetadata(['title' => 'PROVES DE METADADES', 'track' => 107]);
+		//Recuperem el nom del tipus de la càpsula
+		$intro_term_id = $entity->get('field_capsula_tipus_de_capsula')->getValue()[0]['target_id'];
+		$term_name = \Drupal\taxonomy\Entity\Term::load($intro_term_id)->get('name')->value;
+		
+		//Tags de metadades possibles a indicar: title, artist, album, composer, track, year, description
+		$audio->filters()->addMetadata([
+										'title' => $term_name . ' - ' . $entity->getTitle(), 
+										'artist' => \Drupal\user\Entity\User::load(\Drupal::currentUser()->id())->get('name')->value, //Obtenim el nom d'usuari actual
+										'album' => 'Posa\'t al dia', 
+										'composer' => 'Ràdio Bonmatí', 
+										'track' => 1,
+										'year' => date('Y'),
+										'description' => '', 
+									   ]);
 		
 		$format = new FFMpeg\Format\Audio\Mp3();
 		
@@ -262,6 +266,7 @@ function unir_parts($audio_intro, $audio_locucio, $audio_outro, $audio_desti, $g
 		
 		
 		\Drupal::logger('encapsulator')->notice('Unió completada, arxiu guardat a: ' . $audio_desti);
+		
 		
 		return true;
 		
@@ -303,7 +308,7 @@ function netejar_subdirectori($path) {
 		
 		$item = $path . '/' . $value;
 		
-		//Comprovem que sigui un dierctori
+		//Comprovem que sigui un directori
 		if (is_dir($item)) {
 			
 			$arr_sub = array_diff(scandir($item), array('..', '.'));
@@ -400,9 +405,6 @@ function generar_capsula(EntityInterface $entity) {
 					//Obtenim l'objecte que representa la locució
 					$file_locucio = \Drupal::entityTypeManager()->getStorage('file')->load($locucio_id);
 					
-					//kint($locucio_id);
-					//kint($file_locucio);
-					
 					$locucio_path_relative = ltrim($file_locucio->getFileUri(), $prefix_private);
 					$locucio_path_absolute = $path . $locucio_path_relative;
 					
@@ -416,14 +418,11 @@ function generar_capsula(EntityInterface $entity) {
 					*************************************/
 					
 					//Obtenim el camp on hi ha el terme de taxonomia
-					//kint($entity->get('field_capsula_tipus_de_capsula')->getValue()[0]['target_id']);
 					\Drupal::logger('encapsulator')->notice('field_capsula_tipus_de_capsula: ' . $entity->get('field_capsula_tipus_de_capsula')->getValue()[0]['target_id']);
 					$intro_term_id = $entity->get('field_capsula_tipus_de_capsula')->getValue()[0]['target_id'];
 					$intro_term = \Drupal\taxonomy\Entity\Term::load($intro_term_id);
-					//kint($intro_term);
 
 					//Obtenim el camp on hi ha el fitxer d'audio d'intro (que es troba com a camp en el terme de taxonomia)
-					//kint($intro_term->get('field_tipus_de_capsula_audio')->getValue()[0]['target_id']);
 					$intro_id = $intro_term->get('field_tipus_de_capsula_audio')->getValue()[0]['target_id'];
 
 					//Obtenin l'objecte que representa l'audio de l'intro
@@ -431,29 +430,23 @@ function generar_capsula(EntityInterface $entity) {
 					$intro_path_relative = str_replace($prefix_private, '', $file_intro->getFileUri());
 					$intro_path_absolute = $path . $intro_path_relative;
 
-					//kint($intro_path_absolute);
-
 					
 					/************************************
 					* Obtenim el fitxer d'àudio d'outro *
 					*************************************/
 
 					//Obtenim el camp on hi ha el terme de taxonomia
-					//kint($entity->get('field_capsula_tipus_de_final')->getValue()[0]['target_id']);
 					$outro_term_id = $entity->get('field_capsula_tipus_de_final')->getValue()[0]['target_id'];
 					$outro_term = \Drupal\taxonomy\Entity\Term::load($outro_term_id);
 					//kint($outro_term);
 
 					//Obtenim el camp on hi ha el fitxer d'audio d'outro (que es troba com a camp en el terme de taxonomia)
-					//kint($outro_term->get('field_tipus_de_final_audio')->getValue()[0]['target_id']);
 					$outro_id = $outro_term->get('field_tipus_de_final_audio')->getValue()[0]['target_id'];
 
 					//Obtenin l'objecte que representa l'audio de l'outro
 					$file_outro = \Drupal::entityTypeManager()->getStorage('file')->load($outro_id);
 					$outro_path_relative = str_replace($prefix_private, '', $file_outro->getFileUri());
 					$outro_path_absolute = $path . $outro_path_relative;
-
-					//kint($outro_path_absolute);
 
 
 					//Ara que ja tenim els 3 fitxers d'àudio necessaris els processarem amb la llibreria FFMpeg
@@ -462,19 +455,20 @@ function generar_capsula(EntityInterface $entity) {
 					//Generem els directoris temporals de les parts
 					$uuid_tmp = $uuid->generate();
 					$tmp_uuid = $tmp . $uuid_tmp;
-					$intro_path_tmp = $tmp_uuid . '_intro.mp3';
-					$locucio_path_tmp = $tmp_uuid . '_locucio.mp3';
-					$outro_path_tmp = $tmp_uuid . '_outro.mp3';
+					$intro_path_tmp = $tmp_uuid . '_intro.flac';
+					$locucio_path_tmp = $tmp_uuid . '_locucio.flac';
+					$outro_path_tmp = $tmp_uuid . '_outro.flac';
 					$resultat_tmp = $tmp_uuid . '_resultat.mp3';
 					$grafica_tmp = $tmp_uuid . '_grafica.png';
 
+
 					//Convertim/codifiquem els 3 fitxers en MP3
-					$resultat1 = convertir_a_mp3($intro_path_absolute, $intro_path_tmp);
-					$resultat2 = convertir_a_mp3($locucio_path_absolute, $locucio_path_tmp);
-					$resultat3 = convertir_a_mp3($outro_path_absolute, $outro_path_tmp);
+					$resultat1 = convertir_a_flac($intro_path_absolute, $intro_path_tmp);
+					$resultat2 = convertir_a_flac($locucio_path_absolute, $locucio_path_tmp);
+					$resultat3 = convertir_a_flac($outro_path_absolute, $outro_path_tmp);
 
 					if ($resultat1 && $resultat2 && $resultat3) {
-
+						
 						//Unim els 3 fitxers en un de sol
 						$resultat_unir = unir_parts($intro_path_tmp, $locucio_path_tmp, $outro_path_tmp, $resultat_tmp, $grafica_tmp, $entity, $tmp_uuid);
 
@@ -568,23 +562,7 @@ function generar_capsula(EntityInterface $entity) {
 					$missatge = 'ERROR en la generació de la càpsula: ' . $e->getMessage();
 					\Drupal::logger('encapsulator')->error($missatge);
 					$messenger->addError($missatge);
-					//Llancem una excepció que provocarà la interrupció de desat del node actual
-					//throw new Exception('ERROR en la generació de la càpsula');
 				}
-
-
-
-
-
-				// 1 - Treure silencis (davant i darrera)
-				// 2 - Unir els 3 fitxers [FET]
-				// 3 - Normalitzar el fitxer
-				// 4 - Guardar-ho en el camp del node on es guarda la càpsula generada [FET]
-
-				// 5 - Sync/copiar a directori que poden emetre (segons les dates d'inici i fi)
-				// 6 - Eliminar del directori que es poden emetre si la data ha vençut
-				
-				
 				
 				break;
 		}
@@ -779,8 +757,6 @@ function encapsulator_form_alter(&$form, \Drupal\Core\Form\FormStateInterface $f
  * Implements hook_cron().
  */
 function encapsulator_cron() {
-	
-	//retallar_silencis_proves();
 	
 	\Drupal::logger('encapsulator')->notice('### INICI DEL PROCÉS PER ELIMINAR FITXERS ORFES ###');
 	

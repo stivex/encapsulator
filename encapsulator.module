@@ -45,37 +45,33 @@ function convertir_a_mp3($audio_origen, $audio_desti) {
 }
 
 /**
- * Funció que s'encarrega de treure els possibles silencis de l'inici i final del fitxer d'àudio
+ * Funció que ens diu quin és el pic màxim de volum que arriba un fitxer
  */
-function retallar_silencis(&$filters) {
+function obtenir_pic_maxim($fitxer, $aplicar_normalitzacio) {
 	
-	$filters->custom('silenceremove=start_periods=1:start_duration=1:start_threshold=-60dB:detection=peak,aformat=dblp,areverse,silenceremove=start_periods=1:start_duration=1:start_threshold=-60dB:detection=peak,aformat=dblp,areverse');
+	try {
+		
+		$normalitzacio = '';
+		
+		if ($aplicar_normalitzacio == true) {
+			$normalitzacio = 'speechnorm,';
+		}
+		
+		$pic_maxim = system('ffmpeg -hide_banner -i ' . $fitxer . ' -af ' . $normalitzacio . 'volumedetect -vn -f null - 2>&1 | grep -oP "(?<=max_volume:\s-)[^dB]+"', $retval);
 	
-}
-
-/**
- * Funció que s'encarrega de normalitzar el fitxer d'àudio
- */
-function normalitzar(&$filters, $entity) {
+		\Drupal::logger('encapsulator')->notice('El fitxer ' . $fitxer . ' té un pic màxim de volum de: ' . $pic_maxim . 'dB');
 	
-	//Filtre de normalització
-	$filters->custom('loudnorm');
-	
-	//Filtre de volum
-	if (!$entity->get('field_capsula_volum')->isEmpty()) {
-		$filters->custom('volume=' . $entity->get('field_capsula_volum')->value . 'dB');
+		if (!empty(trim($pic_maxim))) {
+			return trim($pic_maxim);
+		} else {
+			return 0;	
+		}
+		
+	} catch(Exception $e) {
+		\Drupal::logger('encapsulator')->error('Hi hagut un error en obtenir el pic màxim de volum del següent fitxer: ' . $fitxer . ' ' . $e->getMessage());
+		return 0;
 	}
-	
-}
 
-/**
- * Funció que s'encarrega d'afegir metadades al fitxer d'àudio
- */
-function afegir_metadata(&$filters, $entity) {
-	
-	$filters->addMetadata(['title' => 'PROVES DE METADADES', 'track' => 107]);
-	//$filters->addMetadata(["title" => $entity->getTitle(), "track" => 107]);
-	
 }
 
 /**
@@ -83,7 +79,7 @@ function afegir_metadata(&$filters, $entity) {
  */
 function retallar_silencis_proves() {
 
-	$file_entrada = '/home/locutor/encapsulador/locucions/61/PTT-20230820-WA0000.ogg';
+	$file_entrada = '/home/locutor/encapsulador/locucions/61/65.mp3';
 	$file_sortida = '/home/locutor/encapsulador/locucions/61/sortida.mp3';
 
 	$ffmpeg = FFMpeg\FFMpeg::create();
@@ -91,10 +87,17 @@ function retallar_silencis_proves() {
 	$audio = $ffmpeg->open($file_entrada);
 	
 	//$audio->filters()->custom('silenceremove=stop_periods=-1:stop_duration=1:stop_threshold=-90dB');
+	/*
 	$audio->filters()
+		->custom('loudnorm')
+		->custom('volume=15dB')
 		->custom('silenceremove=start_periods=1:start_duration=1:start_threshold=-60dB:detection=peak,aformat=dblp,areverse,silenceremove=start_periods=1:start_duration=1:start_threshold=-60dB:detection=peak,aformat=dblp,areverse')
 		->addMetadata(['title' => 'PROVES DE METADADES', 'track' => 107]);
-
+	*/
+	$audio->filters()
+		->custom('loudnorm,volume=15dB,silenceremove=start_periods=1:start_duration=1:start_threshold=-60dB:detection=peak,aformat=dblp,areverse,silenceremove=start_periods=1:start_duration=1:start_threshold=-60dB:detection=peak,aformat=dblp,areverse')
+		->addMetadata(['title' => 'PROVES DE METADADES', 'track' => 107]);
+	
 	$format = new FFMpeg\Format\Audio\Mp3();
 	//$format = new FFMpeg\Format\Audio\Flac();
 	
@@ -116,6 +119,8 @@ function unir_parts($audio_intro, $audio_locucio, $audio_outro, $audio_desti, $g
 		\Drupal::logger('encapsulator')->notice('field_capsula_normalitzar: ' . $entity->get('field_capsula_normalitzar')->value);
 		\Drupal::logger('encapsulator')->notice('field_capsula_treure_silencis: ' . $entity->get('field_capsula_treure_silencis')->value);
 		
+		$messenger = \Drupal::messenger();
+		
 		/***********************************************
 		* Abans d'unir, aplicarem filtres a la locució *
 		************************************************/
@@ -126,23 +131,79 @@ function unir_parts($audio_intro, $audio_locucio, $audio_outro, $audio_desti, $g
 		//Només en cas que l'usuari ens hagi indicat almenys algun tipus de filtre a aplicar...
 		if ($entity->get('field_capsula_normalitzar')->value == 1 || $entity->get('field_capsula_treure_silencis')->value == 1) {
 			
-			//Obrim un fitxer
-			$audio = $ffmpeg->open($audio_locucio);
-
-			//Obtenim el contenidor de filtres (a dins seu hi indicarem quins filtres hi voldrem aplicar (normalitzar, treure silencis...)
-			$filters = $audio->filters();
-
 			//Determinem si l'usuari vol normalitzar el fitxer de la locució
+			$filtre_normalitzar = '';
 			if ($entity->get('field_capsula_normalitzar')->value == 1) {
+				
 				\Drupal::logger('encapsulator')->notice('Es normalitzarà la locució: ' . $audio_locucio);
-				normalitzar($filters, $entity);
+				
+				
+				//Normalitzador general
+				//$filtre_normalitzar = 'loudnorm';
+				
+				//Normalitzador per a la veu
+				//$filtre_normalitzar = 'speechnorm';
+				
+				//Compressor (reduir la diferència entra el so més fort i el més fluix)
+				//$threshold = pow(10,(-12/20));
+				//$filtre_normalitzar .= 'acompressor=threshold=' . $threshold . ':ratio=2:attack=200:release=1000:detection=peak,speechnorm';
+				
+				
+				if (!$entity->get('field_capsula_volum')->isEmpty() && $entity->get('field_capsula_volum')->value != 0) {
+					\Drupal::logger('encapsulator')->notice('Es modificarà el volum en: ' . $entity->get('field_capsula_volum')->value . 'dB');
+					$filtre_normalitzar .= 'speechnorm,volume=' . $entity->get('field_capsula_volum')->value . 'dB';
+				} else {
+					$pic_maxim = obtenir_pic_maxim($audio_locucio, true);
+					\Drupal::logger('encapsulator')->notice('Es modificarà el volum fins el punt màxim on podem portar el audio: ' . $pic_maxim . 'dB');
+					$filtre_normalitzar .= 'speechnorm,volume=' . $pic_maxim . 'dB';
+				}
+				
+				if ($entity->get('field_capsula_treure_silencis')->value == 1) {
+					$filtre_normalitzar .= ',';
+				}
+				
 			}
 
 			//Determinem si l'usuari vol eliminar els silencis d'inici i final del fitxer de la locució
+			$filtre_silencis = '';
 			if ($entity->get('field_capsula_treure_silencis')->value == 1) {
+				
 				\Drupal::logger('encapsulator')->notice('Es treuran els silencis de la locució: ' . $audio_locucio);
-				retallar_silencis($filters);
+				
+				$llindar = $entity->get('field_capsula_silenci_llindar')->value;
+				
+				//$filtre_silencis = 'silenceremove=start_periods=1:start_duration=1:start_threshold=-60dB:detection=peak,aformat=dblp,areverse,silenceremove=start_periods=1:start_duration=1:start_threshold=-60dB:detection=peak,aformat=dblp,areverse';
+				
+				$filtre_silencis = 'silenceremove=start_periods=1:start_duration=0:start_threshold=' . $llindar . 'dB:detection=peak,aformat=dblp,areverse,silenceremove=start_periods=1:start_duration=0:start_threshold=' . $llindar . 'dB:detection=peak,aformat=dblp,areverse';
+				
+				/*
+				$filtre_silencis .= 'silenceremove=start_periods=1:start_duration=1:start_threshold=40dB:detection=peak';
+				$filtre_silencis .= ',';
+				$filtre_silencis .= 'silenceremove=stop_periods=1:stop_duration=1:stop_threshold=40dB:detection=peak';
+				*/
+				
 			}
+			
+			$filtre_total = $filtre_normalitzar . $filtre_silencis;
+			
+			$silenci_segons = $entity->get('field_capsula_silenci_final')->value;
+			
+			//Afegim un silenci darrera la locució (en segons)
+			if ($silenci_segons > 0) {
+				
+				if (!empty($filtre_total)) {
+					$filtre_total .= ',';
+				}
+				
+				$filtre_total .= 'apad=pad_dur=' . $silenci_segons;
+				
+			}
+			
+			//Obrim un fitxer
+			$audio = $ffmpeg->open($audio_locucio);
+			
+			//Obtenim el contenidor de filtres (a dins seu hi indicarem quins filtres hi voldrem aplicar (normalitzar, treure silencis...)
+			$audio->filters()->custom($filtre_total);
 
 			$format = new FFMpeg\Format\Audio\Mp3();
 
@@ -152,6 +213,12 @@ function unir_parts($audio_intro, $audio_locucio, $audio_outro, $audio_desti, $g
 
 			$audio_locucio = $tmp_uuid . '_locucio_filtres.mp3';
 			$audio->save($format, $audio_locucio);
+			
+			//Analitzem la locució un cop aplicats els filtres per determinar si pot existir clipping (picar/saturar l'àudio)
+			$pic_maxim = obtenir_pic_maxim($audio_locucio, false);
+			if ($pic_maxim == 0) {
+				$messenger->addWarning('La locució podria picar/salutar l\'audio, verifica que s\'escolta bé la càpsula i modifica el volum.');
+			}
 			
 		}
 		
@@ -175,9 +242,7 @@ function unir_parts($audio_intro, $audio_locucio, $audio_outro, $audio_desti, $g
 		//Obrim un fitxer
 		$audio = $ffmpeg->open($audio_desti);
 		
-		$filters = $audio->filters();
-		
-		afegir_metadata($filters, $entity);
+		$audio->filters()->addMetadata(['title' => 'PROVES DE METADADES', 'track' => 107]);
 		
 		$format = new FFMpeg\Format\Audio\Mp3();
 		
@@ -201,7 +266,9 @@ function unir_parts($audio_intro, $audio_locucio, $audio_outro, $audio_desti, $g
 		return true;
 		
 	} catch(Exception $e) {
-		\Drupal::logger('encapsulator')->error('Hi hagut un error en unir els MP3 dels següents fitxers: ' . $audio_intro . ' + ' . $audio_locucio . ' + ' . $audio_outro . ' ' . $e->getMessage());
+		$missatge = 'Hi hagut un error en unir els MP3 dels següents fitxers: ' . $audio_intro . ' + ' . $audio_locucio . ' + ' . $audio_outro . ' ' . $e->getMessage();
+		\Drupal::logger('encapsulator')->error($missatge);
+		$messenger->addError($missatge);
 		return false;
 	}
 	
@@ -286,6 +353,8 @@ function generar_capsula(EntityInterface $entity) {
 			case 'capsula':
 				
 				try {
+					
+					$messenger = \Drupal::messenger();
 					
 					\Drupal::logger('encapsulator')->notice('Valor de field_capsula_directori_temporal: ' . $entity->get('field_capsula_directori_temporal')->value);
 					
@@ -496,7 +565,9 @@ function generar_capsula(EntityInterface $entity) {
 					
 					
 				} catch(Exception $e) {
-					\Drupal::logger('encapsulator')->error('ERROR en la generació de la càpsula: ' . $e->getMessage());
+					$missatge = 'ERROR en la generació de la càpsula: ' . $e->getMessage();
+					\Drupal::logger('encapsulator')->error($missatge);
+					$messenger->addError($missatge);
 					//Llancem una excepció que provocarà la interrupció de desat del node actual
 					//throw new Exception('ERROR en la generació de la càpsula');
 				}
@@ -552,6 +623,8 @@ function encapsulator_entity_insert(EntityInterface $entity) {
 				//Amb aquest identificador de node, mourem el fitxer de la locució i de la càpsula a un directori que tingui per nom l'identificador del node
 
 				try {
+					
+					$messenger = \Drupal::messenger();
 					
 					\Drupal::logger('encapsulator')->notice('Hi hagut una nova càpsula. Es renombraran els noms dels fitxers.');
 
@@ -655,7 +728,9 @@ function encapsulator_entity_insert(EntityInterface $entity) {
 					$entity->save();
 
 				} catch(Exception $e) {
-					\Drupal::logger('encapsulator')->error('ERROR en desar la càpsula a la seva ruta definitiva: ' . $e->getMessage());
+					$missatge = 'ERROR en desar la càpsula a la seva ruta definitiva: ' . $e->getMessage();
+					\Drupal::logger('encapsulator')->error($missatge);
+					$messenger->addError($missatge);
 				}
 				
 				break;
@@ -705,7 +780,7 @@ function encapsulator_form_alter(&$form, \Drupal\Core\Form\FormStateInterface $f
  */
 function encapsulator_cron() {
 	
-	retallar_silencis_proves();
+	//retallar_silencis_proves();
 	
 	\Drupal::logger('encapsulator')->notice('### INICI DEL PROCÉS PER ELIMINAR FITXERS ORFES ###');
 	

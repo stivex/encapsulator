@@ -3,6 +3,12 @@
 use Drupal\Core\Entity\EntityInterface;
 use Drupal\Core\File\FileSystemInterface;
 
+use Drupal\views\ViewExecutable;
+use Drupal\views\Plugin\views\query\QueryPluginBase;
+
+use Drupal\Core\Datetime\DrupalDateTime;
+use Drupal\datetime\Plugin\Field\FieldType\DateTimeItemInterface;
+
 
 function get_path() {
 	return '/home/locutor/encapsulador/';
@@ -41,39 +47,6 @@ function convertir_a_flac($audio_origen, $audio_desti) {
 		
 	} catch(Exception $e) {
 		\Drupal::logger('encapsulator')->error('Hi hagut un error en convertir a FLAC el següent fitxer: ' . $audio_origen . ' ' . $e->getMessage());
-		return false;
-	}
-	
-}
-
-
-/**
- * Funció que s'encarrega de convertir un audio a MP3
- */
-function convertir_a_mp3($audio_origen, $audio_desti) {
-	
-	try {
-
-		$ffmpeg = FFMpeg\FFMpeg::create();
-		$audio = $ffmpeg->open($audio_origen);
-
-		$format = new FFMpeg\Format\Audio\Mp3();
-		$format->on('progress', function ($audio, $format, $percentage) {
-			//\Drupal::logger('encapsulator')->notice('Progrés: ' . $percentage . '%');
-		});
-
-		$format
-			->setAudioChannels(2)
-			->setAudioKiloBitrate(192);
-		
-		$audio->save($format, $audio_desti);
-
-		\Drupal::logger('encapsulator')->notice('Conversió a MP3 completada, arxiu guardat a: ' . $audio_desti);
-
-		return true;
-		
-	} catch(Exception $e) {
-		\Drupal::logger('encapsulator')->error('Hi hagut un error en convertir a MP3 el següent fitxer: ' . $audio_origen . ' ' . $e->getMessage());
 		return false;
 	}
 	
@@ -340,8 +313,16 @@ function sincronitzar_capsules($path) {
 	//Que el tipus de contingut sigui 'capsula'
 	$query->condition('type', 'capsula');
 	
-	//Que es trobi la seva data d'emissió entre la data d'inici i fi respecte l'hora actual que estem
-	//...
+	//Escollirem aquelles capsules en què l'hora actual es trobin entre la seva data d'inici i data de fi d'emissió
+	$timezone = date_default_timezone_get(); //Obtenim la zona horària: Europe/Madrid
+	$data_hora_actual = new \DateTime('now', new \DateTimeZone($timezone)); //Obtenim la data-hora actual tinguent en compte la zona horària on ens trobem
+	$data_hora_actual->setTimezone(new \DateTimeZone(DateTimeItemInterface::STORAGE_TIMEZONE)); //Indiquem com volem guardar la data-hora (a la base de dades es guarda en UTC)
+	$data_hora_actual = DrupalDateTime::createFromDateTime($data_hora_actual); //Creem un objecte DrupalDateTime a partir de la data generada en el pas anterior (guardem la data en UTC), 2 hores menys de la zona horària Europe/Madrid)
+	
+	$query->condition('field_capsula_inici_emissio', $data_hora_actual->format(DateTimeItemInterface::DATETIME_STORAGE_FORMAT), '<='); //Per poder comparar correctament la data-hora amb la guardada a la base de dades, hem de formatar-la igual
+	$query->condition('field_capsula_fi_emissio', $data_hora_actual->format(DateTimeItemInterface::DATETIME_STORAGE_FORMAT), '>='); //Per poder comparar correctament la data-hora amb la guardada a la base de dades, hem de formatar-la igual
+	
+	\Drupal::logger('encapsulator')->notice('QUERY: ' . $query->__toString());
 	
 	//Executem la consulta i obtenim una llista de nodes de tipus 'capsula' (haurem de consultar el seu camp on es guarda la càpsules que caldrà copiar)
 	$nodes_id = $query->execute();
@@ -864,6 +845,10 @@ function encapsulator_entity_update(EntityInterface $entity) {
  */
 function encapsulator_form_alter(&$form, \Drupal\Core\Form\FormStateInterface $form_state, $form_id)  {
 	
+	$view = $form_state->get('view');
+	//dpm($view->id());
+	//dpm($view->current_display);
+	
 	//Si ens trobem en un formulari concret, ocultarem determinats elements
 	if($form_id == 'node_capsula_form' || $form_id == 'node_capsula_edit_form') {
 		
@@ -875,6 +860,57 @@ function encapsulator_form_alter(&$form, \Drupal\Core\Form\FormStateInterface $f
 		$form['field_capsula_directori_temporal']['#prefix'] = "<div class='hide-field'>";
 		$form['field_capsula_directori_temporal']['#suffix'] = "</div>";
 
+	}
+	
+	//$form['#form_id'] == 'views_exposed_form'
+	//$form['#id'] == 'views-exposed-form-view-capsules-page-1'
+	
+}
+
+/**
+ * Implements hook_views_query_alter().
+ */
+function encapsulator_views_query_alter(ViewExecutable $view, QueryPluginBase $query) {
+	
+	//Només en el cas que ens trobem en una vista concreta i en una de les seves visualitzacions concretes...
+	if ($view->id() == 'view_capsules' && $view->current_display == 'display_capsules') {
+
+		//dpm($query->where[1]['conditions']);
+
+		//Recorrem els grups de condicions
+		foreach ($query->where as &$condition_group) {
+
+			//Recorrem les condicions del grup
+			foreach ($condition_group['conditions'] as &$condition) {
+
+				if ( str_contains($condition['field'], 'field_capsula_inici_emissio_value') && $view->exposed_data['field_capsula_inici_emissio_value'] != '') { //Si la condició actual es tracta de la condició de filtratge per a la data d'inici d'emissió, la modificarem per indicar la hora 23:59:59
+
+					$data_inici = $view->exposed_data['field_capsula_inici_emissio_value'] . 'T00:00:00';
+
+					$condition = [
+									'field' => "DATE_FORMAT((node__field_capsula_inici_emissio.field_capsula_inici_emissio_value + INTERVAL 7200 SECOND), '%Y-%m-%d\T%H:%i:%s') >= DATE_FORMAT(('" . $data_inici ."'), '%Y-%m-%d\T%H:%i:%s')", //INTERVAL 7200 SECOND --> és el fus horàri on ens trobem (+2 hores)
+									'value' => array(),
+									'operator' => 'formula',
+								];
+
+				} else if ( str_contains($condition['field'], 'field_capsula_fi_emissio_value') && $view->exposed_data['field_capsula_fi_emissio_value'] != '' ) { //Si la condició actual es tracta de la condició de filtratge per a la data de fi d'emissió, la modificarem per indicar la hora 00:00:00
+
+					$data_fi = $view->exposed_data['field_capsula_fi_emissio_value'] . 'T23:59:59';
+
+					$condition = [
+									'field' => "DATE_FORMAT((node__field_capsula_fi_emissio.field_capsula_fi_emissio_value + INTERVAL 7200 SECOND), '%Y-%m-%d\T%H:%i:%s') <= DATE_FORMAT(('" . $data_fi ."'), '%Y-%m-%d\T%H:%i:%s')", //INTERVAL 7200 SECOND --> és el fus horàri on ens trobem (+2 hores)
+									'value' => array(),
+									'operator' => 'formula',
+								];
+
+				}
+
+			}
+
+		}
+		
+		//dpm($query->where[1]['conditions']);
+		
 	}
 	
 }

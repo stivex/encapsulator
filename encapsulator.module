@@ -681,6 +681,16 @@ function generar_capsula(EntityInterface $entity) {
 	
 }
 
+/**
+ * Implements hook_entity_type_alter().
+ */
+function encapsulator_entity_type_alter(array &$entity_types) {
+	
+	//Afegim la validació/restricció perquè la data-hora de fi d'emissió no pugui ser anterior (o igual) a la data-hora d'inici d'emissió
+	$entity_types['node']->addConstraint('StartEndDates');
+	
+}
+
 
 /**
  * Implements hook_entity_presave().

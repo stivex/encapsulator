@@ -1,5 +1,7 @@
 <?php
 
+use Ds\Set; //Per poder utilitzar estructures de dades SET (semblant a un map però només amb keys, sense valors)
+
 use Drupal\Core\Entity\EntityInterface;
 use Drupal\Core\File\FileSystemInterface;
 
@@ -21,10 +23,29 @@ function get_prefix_private() {
 
 
 /**
+* Funció que genera en un string el contingut d'un array
+*/
+function array_to_string($array, $nom_array) {
+
+	$str = '';
+
+	$num_elements = count($array);
+	$str .= $nom_array . "(" . $num_elements . "): ";
+	for($i = 0; $i < $num_elements; $i++) {
+		$str .= "[" . $array[$i] . "]";
+	}
+	$str .= PHP_EOL;
+
+	return $str;
+
+}
+
+
+/**
 * Funció que s'encarrega de convertir un audio a FLAC
 */
 function convertir_a_flac($audio_origen, $audio_desti) {
-	
+
 	try {
 
 		$ffmpeg = FFMpeg\FFMpeg::create();
@@ -38,18 +59,18 @@ function convertir_a_flac($audio_origen, $audio_desti) {
 		$format
 			->setAudioChannels(2)
 			->setAudioKiloBitrate(256);
-		
+
 		$audio->save($format, $audio_desti);
 
 		\Drupal::logger('encapsulator')->notice('Conversió a FLAC completada, arxiu guardat a: ' . $audio_desti);
 
 		return true;
-		
+
 	} catch(Exception $e) {
 		\Drupal::logger('encapsulator')->error('Hi hagut un error en convertir a FLAC el següent fitxer: ' . $audio_origen . ' ' . $e->getMessage());
 		return false;
 	}
-	
+
 }
 
 
@@ -57,25 +78,25 @@ function convertir_a_flac($audio_origen, $audio_desti) {
  * Funció que ens diu quin és el pic màxim de volum que arriba un fitxer
  */
 function obtenir_pic_maxim($fitxer, $aplicar_normalitzacio) {
-	
+
 	try {
-		
+
 		$normalitzacio = '';
-		
+
 		if ($aplicar_normalitzacio == true) {
 			$normalitzacio = 'speechnorm,';
 		}
-		
+
 		$pic_maxim = system('ffmpeg -hide_banner -i ' . $fitxer . ' -af ' . $normalitzacio . 'volumedetect -vn -f null - 2>&1 | grep -oP "(?<=max_volume:\s-)[^dB]+"', $retval);
-	
+
 		\Drupal::logger('encapsulator')->notice('El fitxer ' . $fitxer . ' té un pic màxim de volum de: ' . $pic_maxim . 'dB');
-	
+
 		if (!empty(trim($pic_maxim))) {
 			return trim($pic_maxim);
 		} else {
-			return 0;	
+			return 0;
 		}
-		
+
 	} catch(Exception $e) {
 		\Drupal::logger('encapsulator')->error('Hi hagut un error en obtenir el pic màxim de volum del següent fitxer: ' . $fitxer . ' ' . $e->getMessage());
 		return 0;
@@ -90,40 +111,40 @@ function obtenir_pic_maxim($fitxer, $aplicar_normalitzacio) {
 function unir_parts($audio_intro, $audio_locucio, $audio_outro, &$audio_desti, $grafica_tmp, $entity, $tmp_uuid) {
 
 	try {
-		
+
 		\Drupal::logger('encapsulator')->notice('field_capsula_normalitzar: ' . $entity->get('field_capsula_normalitzar')->value);
 		\Drupal::logger('encapsulator')->notice('field_capsula_treure_silencis: ' . $entity->get('field_capsula_treure_silencis')->value);
-		
+
 		$messenger = \Drupal::messenger();
-		
+
 		/***********************************************
 		* Abans d'unir, aplicarem filtres a la locució *
 		************************************************/
-		
+
 		//Creem una instància de la llibreria PHP-FFMpeg
 		$ffmpeg = FFMpeg\FFMpeg::create();
-		
+
 		//Només en cas que l'usuari ens hagi indicat almenys algun tipus de filtre a aplicar...
 		if ($entity->get('field_capsula_normalitzar')->value == 1 || $entity->get('field_capsula_treure_silencis')->value == 1) {
-			
+
 			//Determinem si l'usuari vol normalitzar el fitxer de la locució
 			$filtre_normalitzar = '';
 			if ($entity->get('field_capsula_normalitzar')->value == 1) {
-				
+
 				\Drupal::logger('encapsulator')->notice('Es normalitzarà la locució: ' . $audio_locucio);
-				
-				
+
+
 				//Normalitzador general
 				//$filtre_normalitzar = 'loudnorm';
-				
+
 				//Normalitzador per a la veu
 				//$filtre_normalitzar = 'speechnorm';
-				
+
 				//Compressor (reduir la diferència entra el so més fort i el més fluix)
 				//$threshold = pow(10,(-12/20));
 				//$filtre_normalitzar .= 'acompressor=threshold=' . $threshold . ':ratio=2:attack=200:release=1000:detection=peak,speechnorm';
-				
-				
+
+
 				if (!$entity->get('field_capsula_volum')->isEmpty() && $entity->get('field_capsula_volum')->value != 0) {
 					\Drupal::logger('encapsulator')->notice('Es modificarà el volum en: ' . $entity->get('field_capsula_volum')->value . 'dB');
 					$filtre_normalitzar .= 'speechnorm,volume=' . $entity->get('field_capsula_volum')->value . 'dB';
@@ -132,43 +153,43 @@ function unir_parts($audio_intro, $audio_locucio, $audio_outro, &$audio_desti, $
 					\Drupal::logger('encapsulator')->notice('Es modificarà el volum fins el punt màxim on podem portar el audio: ' . $pic_maxim . 'dB');
 					$filtre_normalitzar .= 'speechnorm,volume=' . $pic_maxim . 'dB';
 				}
-				
+
 				if ($entity->get('field_capsula_treure_silencis')->value == 1) {
 					$filtre_normalitzar .= ',';
 				}
-				
+
 			}
 
 			//Determinem si l'usuari vol eliminar els silencis d'inici i final del fitxer de la locució
 			$filtre_silencis = '';
 			if ($entity->get('field_capsula_treure_silencis')->value == 1) {
-				
+
 				\Drupal::logger('encapsulator')->notice('Es treuran els silencis de la locució: ' . $audio_locucio);
-				
+
 				$llindar = $entity->get('field_capsula_silenci_llindar')->value;
-				
+
 				$filtre_silencis = 'silenceremove=start_periods=1:start_duration=0:start_threshold=' . $llindar . 'dB:detection=peak,aformat=dblp,areverse,silenceremove=start_periods=1:start_duration=0:start_threshold=' . $llindar . 'dB:detection=peak,aformat=dblp,areverse';
-				
+
 			}
-			
+
 			$filtre_total = $filtre_normalitzar . $filtre_silencis;
-			
+
 			$silenci_segons = $entity->get('field_capsula_silenci_final')->value;
-			
+
 			//Afegim un silenci darrera la locució (en segons)
 			if ($silenci_segons > 0) {
-				
+
 				if (!empty($filtre_total)) {
 					$filtre_total .= ',';
 				}
-				
+
 				$filtre_total .= 'apad=pad_dur=' . $silenci_segons;
-				
+
 			}
-			
+
 			//Obrim un fitxer
 			$audio = $ffmpeg->open($audio_locucio);
-			
+
 			//Obtenim el contenidor de filtres (a dins seu hi indicarem quins filtres hi voldrem aplicar (normalitzar, treure silencis...)
 			$audio->filters()->custom($filtre_total);
 
@@ -180,79 +201,79 @@ function unir_parts($audio_intro, $audio_locucio, $audio_outro, &$audio_desti, $
 
 			$audio_locucio = $tmp_uuid . '_locucio_filtres.flac';
 			$audio->save($format, $audio_locucio);
-			
+
 			//Analitzem la locució un cop aplicats els filtres per determinar si pot existir clipping (picar/saturar l'àudio)
 			$pic_maxim = obtenir_pic_maxim($audio_locucio, false);
 			if ($pic_maxim == 0) {
 				$messenger->addWarning('El volum de la locució podria picar/salutar l\'audio, verifica que s\'escolta bé la càpsula.');
 			}
-			
+
 		}
-		
+
 		/***********************************************
 		* Un cop aplicats els filtres unirem les parts *
 		***********************************************/
-		
+
 		//Obrim un fitxer
 		$video = $ffmpeg->open($audio_intro);
-		
+
 		//Unim les parts
 		$video
 			->concat(array($audio_intro, $audio_locucio, $audio_outro))
 			->saveFromSameCodecs($audio_desti, false);
-		
-		
+
+
 		/**************************************************
 		* Un cop unides les parts, afegirem les metadades *
 		**************************************************/
 
 		//Obrim un fitxer
 		$audio = $ffmpeg->open($audio_desti);
-		
+
 		//Recuperem el nom del tipus de la càpsula
 		$intro_term_id = $entity->get('field_capsula_tipus_de_capsula')->getValue()[0]['target_id'];
 		$term_name = \Drupal\taxonomy\Entity\Term::load($intro_term_id)->get('name')->value;
-		
+
 		//Tags de metadades possibles a indicar: title, artist, album, composer, track, year, description
 		$audio->filters()->addMetadata([
-										'title' => $term_name . ' - ' . $entity->getTitle(), 
+										'title' => $term_name . ' - ' . $entity->getTitle(),
 										'artist' => \Drupal\user\Entity\User::load(\Drupal::currentUser()->id())->get('name')->value, //Obtenim el nom d'usuari actual
-										'album' => 'Posa\'t al dia', 
-										'composer' => 'Ràdio Bonmatí', 
+										'album' => 'Posa\'t al dia',
+										'composer' => 'Ràdio Bonmatí',
 										'track' => 1,
 										'year' => date('Y'),
-										'description' => '', 
+										'description' => '',
 									   ]);
-		
+
 		$format = new FFMpeg\Format\Audio\Mp3();
-		
+
 		$format
 			->setAudioChannels(2)
 			->setAudioKiloBitrate(192);
-		
+
 		$audio_desti = $tmp_uuid . '_resultat_metadades.mp3';
 		$audio->save($format, $audio_desti);
-		
-		
+
+
 		/*****************************************************
 		* Generem la gràfica de la forma d'ona de la capsula *
 		*****************************************************/
 		$waveform = $audio->waveform(640, 120, array('#000000'));
 		$waveform->save($grafica_tmp);
-		
-		
+
+
 		\Drupal::logger('encapsulator')->notice('Unió completada, arxiu guardat a: ' . $audio_desti);
-		
-		
+
+
 		return true;
-		
+
 	} catch(Exception $e) {
 		$missatge = 'Hi hagut un error en unir els MP3 dels següents fitxers: ' . $audio_intro . ' + ' . $audio_locucio . ' + ' . $audio_outro . ' ' . $e->getMessage();
 		\Drupal::logger('encapsulator')->error($missatge);
 		$messenger->addError($missatge);
 		return false;
 	}
-	
+
 }
 
 
@@ -262,28 +283,155 @@ function unir_parts($audio_intro, $audio_locucio, $audio_outro, &$audio_desti, $
 function validar_resultat($audio_a_validar) {
 
 	try {
-		
+
 		$ffprobe = FFMpeg\FFProbe::create();
 		return $ffprobe->isValid($audio_a_validar);
-		
+
 	} catch(Exception $e) {
 		\Drupal::logger('encapsulator')->error('Hi hagut un error en validar el fitxer: ' . $audio_a_validar . ' ' . $e->getMessage());
 		return false;
 	}
-	
+
 }
+
+/**
+ * Funció que escull entre un conjunt de càpsules una d'elles per ser la pròxima a reproduir
+ */
+function escollir_capsula($arr_capsules_programables, $path_capsules_programades) {
+
+	//Directori on deixarem els fitxers:
+  // -La càpsula programada
+  // -El fitxer amb les càpsules ja reproduides
+  // -El log/historial de les càpsules que s'han anat programant/emetent
+  $file_reproduides = $path_capsules_programades . '/reproduides.json';
+  $file_log = $path_capsules_programades . '/debug.log';
+  $str_log = '';
+
+	try {
+
+			$str_log .= array_to_string($arr_capsules_programables, 'PROGRAMABLES');
+
+		  //Mirem si el fitxer de l'historial existeix
+		  if (!file_exists($file_log)) {
+		    //Crearem el fitxer
+		    fopen($file_log, 'w');
+		  }
+
+		  //Mirem si el fitxer de capsules reproduides existeix
+		  if (!file_exists($file_reproduides)) {
+		    //Crearem el fitxer, amb un array sense elements
+		    file_put_contents($file_reproduides, json_encode(array()));
+		  }
+
+			/***************************************************
+			* Recuperem del fitxer les capsules ja reproduïdes *
+			****************************************************/
+
+			//Recuperem la informació per guardar-la en una estructura de dades (array)
+			$arr_capsules_reproduides = json_decode(file_get_contents($file_reproduides), true);
+			//var_dump($arr_capsules_reproduides);
+			//echo "</br>";
+
+			$str_log .= array_to_string($arr_capsules_reproduides, 'REPRODUIDES');
+
+			/***************************************************
+			* Convertim els arrays en estructures de dades SET *
+			****************************************************/
+
+			$set_capsules_programables = new Set($arr_capsules_programables);
+			//var_dump($set_capsules_programables);
+			//echo "</br>";
+
+			$set_capsules_reproduides = new Set($arr_capsules_reproduides);
+			//var_dump($set_capsules_reproduides);
+			//echo "</br>";
+
+			/*******************************************************************************
+			* Mirarem quines càpsules de les programables no han estat reproduides encara *
+			********************************************************************************/
+
+			//Ens retorna una estructura de dades on ha exclòs de les càpsules programables les que ja han estat reproduides
+			$set_capsules_candidates = $set_capsules_programables->diff($set_capsules_reproduides);
+
+			//En cas que el resultat sigui que no hi hagi càpsules candidates, significarà ja s'ha reproduit totes les capsules programables
+			if ($set_capsules_candidates->count() == 0) {
+				//Per tant, cal resetejar el contingut de les capsules ja reproduides
+				$set_capsules_reproduides->clear();
+				//Com que ara no consta que hi hagi cap capsula reproduida, qualsevol capsula programable n'és una candidata a ser reproduida
+				$set_capsules_candidates = $set_capsules_programables;
+			}
+
+			$arr_capsules_candidates = $set_capsules_candidates->toArray();
+			$str_log .= array_to_string($arr_capsules_candidates, 'CANDIDATES');
+
+			//Si arribats en aquest punt no tenim cap capsula candidata, és que no n'hi ha cap per poder reproduir
+			$capsula = -1;
+			$num_capsules_candidates = $set_capsules_candidates->count();
+
+			if ($set_capsules_candidates->count() > 0) {
+
+				//Hi ha alguna capsula candidata
+
+				/********************************************************************************************************
+				* Escollirem de forma aleatoria una de les capsules candidates perquè sigui la pròxima a ser reproduida *
+				*********************************************************************************************************/
+
+				//Establim quina és la posició mínima i màxima de l'estructura de dades
+				$rand_min = 0;
+				$rand_max = $num_capsules_candidates - 1;
+
+				//Obtenim una posició aleatoria
+				$posicio = rand($rand_min, $rand_max);
+
+				//Recuparem l'identificador de la capsula que es troba a la posició escollida a l'atzar
+				$capsula = $set_capsules_candidates->get($posicio);
+
+				/**************************************************
+				* Guardem l'identificador de la capsula escollida *
+				***************************************************/
+
+				//Afegirem a l'estructura de capsules reproduides, la càpsula que acabem d'escollir perquè sigui la pròxima a reproduir-se
+				$set_capsules_reproduides->add($capsula);
+
+				$arr_capsules_reproduides = $set_capsules_reproduides->toArray();
+
+				//Guardem l'array al fitxer de reproduides.json
+				file_put_contents($file_reproduides, json_encode($arr_capsules_reproduides));
+
+			}
+
+			//Retornem l'dentificador del node que representa la càpsula
+			$str_log .= 'CAPSULA ESCOLLIDA: ' . $capsula . PHP_EOL;
+
+			$str_log .= array_to_string($arr_capsules_reproduides, 'REPRODUIDES');
+
+			//Generem la data-hora actual per incloure en l'historial
+			$str_log = '================= ' . date("Y-m-d H:i:s") . ' =================' . PHP_EOL . $str_log . PHP_EOL;
+
+			//Escribim el el fitxer de l'historial
+			file_put_contents($file_log, $str_log, FILE_APPEND);
+
+			return $capsula;
+
+	} catch(Exception $e) {
+		\Drupal::logger('encapsulator')->error('En escollir la pròxima càpsula: ' . $e->getMessage());
+		return false;
+	}
+
+}
+
 
 /**
  * Sincronitzem (copiem dins del directori './capsules/programades' les càpsules que s'han de poder emetre a l'hora actual que ens trobem
  */
 function sincronitzar_capsules($path) {
-	
+
 	/********************************************************************************
 	* Esborrarem tots els fitxers/càpsules que contingui el directori 'programades' *
 	********************************************************************************/
 
 	//Obtenim una llista de fitxers que es troben en el directori
-	$fitxers = glob($path . '/*'); 
+	$fitxers = glob($path . '/*.mp3');
 
 	//Esborrarem tots els fitxers de la llista obtinguda
 	foreach($fitxers as $fitxer) {
@@ -291,71 +439,83 @@ function sincronitzar_capsules($path) {
 		//Comprovem que sigui realment un fitxer
 		if(is_file($fitxer)) {
 			//Esborrem el fitxer de disc
-			unlink($fitxer); 
+			unlink($fitxer);
 		}
 
 	}
-	
-	
+
+
 	/************************************************************************
 	* Consultarem quines càpsules cal copiar dins del directori 'programades' *
 	*************************************************************************/
-	
+
 	//Creem una query per poder fer la consulta
 	$query = \Drupal::entityTypeManager()->getStorage('node')->getQuery();
-	
+
 	//Que tingui en compte tant els nodes/elements que pot, com també els que no pot veure l'usuari
 	$query->accessCheck(FALSE);
-	
+
 	//Aquells elements que es trobin publicats
 	$query->condition('status', 1);
-	
+
 	//Que el tipus de contingut sigui 'capsula'
 	$query->condition('type', 'capsula');
-	
+
 	//Escollirem aquelles capsules en què l'hora actual es trobin entre la seva data d'inici i data de fi d'emissió
 	$timezone = date_default_timezone_get(); //Obtenim la zona horària: Europe/Madrid
 	$data_hora_actual = new \DateTime('now', new \DateTimeZone($timezone)); //Obtenim la data-hora actual tinguent en compte la zona horària on ens trobem
 	$data_hora_actual->setTimezone(new \DateTimeZone(DateTimeItemInterface::STORAGE_TIMEZONE)); //Indiquem com volem guardar la data-hora (a la base de dades es guarda en UTC)
 	$data_hora_actual = DrupalDateTime::createFromDateTime($data_hora_actual); //Creem un objecte DrupalDateTime a partir de la data generada en el pas anterior (guardem la data en UTC), 2 hores menys de la zona horària Europe/Madrid)
-	
+
 	$query->condition('field_capsula_inici_emissio', $data_hora_actual->format(DateTimeItemInterface::DATETIME_STORAGE_FORMAT), '<='); //Per poder comparar correctament la data-hora amb la guardada a la base de dades, hem de formatar-la igual
 	$query->condition('field_capsula_fi_emissio', $data_hora_actual->format(DateTimeItemInterface::DATETIME_STORAGE_FORMAT), '>='); //Per poder comparar correctament la data-hora amb la guardada a la base de dades, hem de formatar-la igual
-	
+
 	\Drupal::logger('encapsulator')->notice('QUERY: ' . $query->__toString());
-	
+
 	//Executem la consulta i obtenim una llista de nodes de tipus 'capsula' (haurem de consultar el seu camp on es guarda la càpsules que caldrà copiar)
 	$nodes_id = $query->execute();
-	
-	/**************************************************************************
-	* Copiem les càpsules que s'han d'emetre dins del directori 'programades' *
-	***************************************************************************/
-	
-	$storage = \Drupal::entityTypeManager()->getStorage('node');
-	
+
 	$path_origen = get_path() . 'capsules/';
 	$path_desti = $path . '/';
-	
-	
-	foreach ($nodes_id as $node_id) {
-		
+
+	$file_historial = $path_desti . '/historial.txt';
+
+	/*************************************************************
+	* D'entre les càpsules que es poden emetre, n'escollirem una *
+	**************************************************************/
+
+	$node_id = escollir_capsula(array_keys($nodes_id), $path_desti);
+
+	$str_historial = '[' . date("Y-m-d H:i:s") . '] ';
+
+	/***********************************************************************************
+	* Copiem la càpsula que hem escollit per emetre a dins del directori 'programades' *
+	************************************************************************************/
+
+	if ($node_id >= 0) {
+
+		$storage = \Drupal::entityTypeManager()->getStorage('node');
+
 		//A partir de la ID del node, obtenim l'objecte
 		$node = $storage->load($node_id);
-		
+
 		//Obtenim l'identificador del fitxer de la càpsula del node
 		$fid = $node->get('field_capsula_generada')->getValue()[0]['target_id'];
-		
+
 		//A partir del fid obtenim l'entitat del fitxer
 		$fitxer = Drupal\file\Entity\File::load($fid);
-		
+
 		//Copiem el fitxer dins del directori 'programades'
-		copy($path_origen . $node_id . '/' . $fitxer->getFilename(), $path_desti . $fitxer->getFilename());
-		
-		\Drupal::logger('encapsulator')->notice('S\'ha programat la càpsula: ' . $fitxer->getFilename());
-		
-    }
-	
-	
+		copy($path_origen . $node_id . '/' . $fitxer->getFilename(), $path_desti . 'capsula.mp3');
+
+		\Drupal::logger('encapsulator')->notice('S\'ha programat la càpsula: [' . $node_id . '] - ' . $node->getTitle());
+		file_put_contents($file_historial, $str_historial . '[' . $node_id . '] - ' . $node->getTitle() . PHP_EOL, FILE_APPEND);
+
+	} else {
+		\Drupal::logger('encapsulator')->notice('No hi ha cap càpsula candidata per emetre ara mateix.');
+		file_put_contents($file_historial, $str_historial . 'Cap càpsula per emtre.' . PHP_EOL, FILE_APPEND);
+	}
+
 }
 
 
@@ -363,16 +523,16 @@ function sincronitzar_capsules($path) {
  * Esborrarem de disc tots aquells fitxers que ja no formin part de cap entitat/node
  */
 function netejar_fitxers() {
-	
+
 	//Obtenim tots els identificadors de fitxers
 	$fids = Drupal::entityQuery('file')->accessCheck(FALSE)->execute();
-	
+
 	//Obtenim el servei que ens ajudarà a determinar si cada fitxer està en ús o bé està orfe
 	$file_usage = Drupal::service('file.usage');
-	
+
 	//Recorrem tots els fitxers per la seva fid (identificador de fitxer)
   	foreach ($fids as $fid) {
-		
+
 		//A partir del fid obtenim l'entitat del fitxer
 		$file = Drupal\file\Entity\File::load($fid);
 
@@ -381,15 +541,15 @@ function netejar_fitxers() {
 
 		//Si el valor = 0, significarà que no està essent usant i que per tant es pot eliminar
 		if (count($usage) == 0) {
-			
+
 			$file_name = $file->getFilename();
 			\Drupal::logger('encapsulator')->notice('El fitxer ' . $file_name . ' és orfe.');
-			
+
 				try {
-		
+
 					//Eliminem el fitxer
 					$file->delete();
-					
+
 					\Drupal::logger('encapsulator')->notice('El fitxer ' . $file_name . ' ha estat eliminat.');
 
 				} catch(Exception $e) {
@@ -397,9 +557,9 @@ function netejar_fitxers() {
 				}
 
 		}
-	  	
+
 	}
-	
+
 }
 
 
@@ -412,14 +572,14 @@ function netejar_subdirectori($path) {
 	$arr = array_diff(scandir($path), array('..', '.', 'programades')); //El directoris '..', '.' i 'programades' no els voldrem tenir en compte, perquè no voldrem que s'esborrin
 
 	foreach ($arr as $value) {
-		
+
 		$item = $path . '/' . $value;
-		
+
 		//Comprovem que sigui un directori
 		if (is_dir($item)) {
-			
+
 			$arr_sub = array_diff(scandir($item), array('..', '.'));
-			
+
 			//Comprovem que no tingui cap contingut a dins seu
 			if (sizeof($arr_sub) == 0) {
 				\Drupal::logger('encapsulator')->notice('Esborrem el directori ja que no té contingut dins seu: ' . $item);
@@ -429,7 +589,7 @@ function netejar_subdirectori($path) {
 		}
 
 	}
-	
+
 }
 
 
@@ -437,9 +597,9 @@ function netejar_subdirectori($path) {
  * Funció que genera la ruta absoluta on desar la capsula a partir d'un identificador
  */
 function generar_path_absolute_final_capsula($id) {
-	
+
 	$prefix_private = get_prefix_private();
-	
+
 	return $prefix_private . 'capsules/' . $id . '/';
 }
 
@@ -448,9 +608,9 @@ function generar_path_absolute_final_capsula($id) {
  * Funció que genera la ruta absoluta on desar la locució a partir d'un identificador
  */
 function generar_path_absolute_final_locucio($id) {
-	
+
 	$prefix_private = get_prefix_private();
-	
+
 	return $prefix_private . 'locucions/' . $id . '/';
 }
 
@@ -459,18 +619,18 @@ function generar_path_absolute_final_locucio($id) {
  * Funció que s'encarrega de tot el procés de generar el fitxer d'àudio de la càpsula
  */
 function generar_capsula(EntityInterface $entity) {
-		
+
 	if ($entity->getEntityTypeId() == 'node') {
-		
+
 		switch ($entity->bundle()) {
 			case 'capsula':
-				
+
 				try {
-					
+
 					$messenger = \Drupal::messenger();
-					
+
 					\Drupal::logger('encapsulator')->notice('Valor de field_capsula_directori_temporal: ' . $entity->get('field_capsula_directori_temporal')->value);
-					
+
 					//Si el camp 'field_capsula_directori_temporal' del node té valor no deixarem continuar, retornarem directament $entity
 					//Així evitem que quan des del hook_entity_insert o hook_entity_update fem un $entity->save() no s'executarà novament aquesta funció
 					if(!$entity->get('field_capsula_directori_temporal')->isEmpty()) {
@@ -485,12 +645,12 @@ function generar_capsula(EntityInterface $entity) {
 
 					$path = get_path();
 					$prefix_private = get_prefix_private();
-					
+
 					//Per poder generar directoris i arxius temporals
 					$fileSystem = \Drupal::service('file_system');
 					$tmp = $fileSystem->getTempDirectory() . '/';
 					$uuid = \Drupal::service('uuid');
-					
+
 					//Determinem si es tracta d'un nou node o bé la modificació d'un d'existent
 					if ($entity->isNew()) {
 						$id = $uuid->generate();
@@ -499,10 +659,10 @@ function generar_capsula(EntityInterface $entity) {
 						$id = $entity->id();
 						$entity->set('field_capsula_directori_temporal', null);
 					}
-					
+
 					//Generem la ruta on guardarem la capsula resultant que es generarà
 					$capsula_path_absolute_final = generar_path_absolute_final_capsula($id);
-					
+
 					//Generarem la ruta on guardarem la locució al final del procés
 					$locucio_path_absolute_final = generar_path_absolute_final_locucio($id);
 
@@ -512,19 +672,19 @@ function generar_capsula(EntityInterface $entity) {
 
 					//Obtenim l'objecte que representa la locució
 					$file_locucio = \Drupal::entityTypeManager()->getStorage('file')->load($locucio_id);
-					
+
 					$locucio_path_relative = ltrim($file_locucio->getFileUri(), $prefix_private);
 					$locucio_path_absolute = $path . $locucio_path_relative;
-					
+
 
 					\Drupal::logger('encapsulator')->notice('$locucio_path_absolute: ' . $locucio_path_absolute);
 					\Drupal::logger('encapsulator')->notice('$locucio_path_absolute_final: ' . $locucio_path_absolute_final);
 
-					
+
 					/************************************
 					* Obtenim el fitxer d'àudio d'intro *
 					*************************************/
-					
+
 					//Obtenim el camp on hi ha el terme de taxonomia
 					\Drupal::logger('encapsulator')->notice('field_capsula_tipus_de_capsula: ' . $entity->get('field_capsula_tipus_de_capsula')->getValue()[0]['target_id']);
 					$intro_term_id = $entity->get('field_capsula_tipus_de_capsula')->getValue()[0]['target_id'];
@@ -538,7 +698,7 @@ function generar_capsula(EntityInterface $entity) {
 					$intro_path_relative = str_replace($prefix_private, '', $file_intro->getFileUri());
 					$intro_path_absolute = $path . $intro_path_relative;
 
-					
+
 					/************************************
 					* Obtenim el fitxer d'àudio d'outro *
 					*************************************/
@@ -576,7 +736,7 @@ function generar_capsula(EntityInterface $entity) {
 					$resultat3 = convertir_a_flac($outro_path_absolute, $outro_path_tmp);
 
 					if ($resultat1 && $resultat2 && $resultat3) {
-						
+
 						//Unim els 3 fitxers en un de sol
 						$resultat_unir = unir_parts($intro_path_tmp, $locucio_path_tmp, $outro_path_tmp, $resultat_tmp, $grafica_tmp, $entity, $tmp_uuid);
 
@@ -605,7 +765,7 @@ function generar_capsula(EntityInterface $entity) {
 					if (!$fileSystem->prepareDirectory($capsula_path_absolute_final, FileSystemInterface::CREATE_DIRECTORY)) {
 						throw new Exception('ERROR en generar el directori: ' . $capsula_path_absolute_final);
 					}
-					
+
 					//Guardem el fitxer de la capsula resultant final
 					$handle = fopen($resultat_tmp, 'r');
 					$fileRepository = \Drupal::service('file.repository');
@@ -614,7 +774,7 @@ function generar_capsula(EntityInterface $entity) {
 
 					//Un cop guardat el fitxer al directori final i creada la seva entitat dins del sistema Drupal, el vincularem l'entitat/node que toqui
 					$entity->set('field_capsula_generada', $file);
-					
+
 					//Guardem el fitxer de la grafica
 					$handle = fopen($grafica_tmp, 'r');
 					$file_grafica = $fileRepository->writeData(fread($handle, filesize($grafica_tmp)), $capsula_path_absolute_final . $id . '.png', FileSystemInterface::EXISTS_REPLACE);
@@ -622,8 +782,8 @@ function generar_capsula(EntityInterface $entity) {
 
 					//Un cop guardat el fitxer al directori final i creada la seva entitat dins del sistema Drupal, el vincularem l'entitat/node que toqui
 					$entity->set('field_capsula_grafica', $file_grafica);
-					
-					
+
+
 					//Si el fitxer d'àudio de la locució no està guardada dins d'un subdirectori (que tingui com a nom l'identificador del node), ho farem ara
 					//Tot i que no ho farem si l'usuari no ha canviat/pujat un nou arxiu de locució (en el cas que l'usuari modifiques qualsevol altre valor excepte el camp on hi ha el fitxer de la locució)
 					$fid_original = '';
@@ -631,64 +791,64 @@ function generar_capsula(EntityInterface $entity) {
 						$fid_original = $entity->original->get('field_capsula_locucio')->getValue()[0]['target_id'];
 					}
 					$fid_new = $entity->get('field_capsula_locucio')->getValue()[0]['target_id'];
-					
+
 					if ($fid_original != $fid_new) {
 						\Drupal::logger('encapsulator')->notice('El fitxer de la locució ha estat canviat o no existia.');
 						//Comprovem si el directori de destí de la locució existeix, en cas que no existeixi el crearem
 						if (!$fileSystem->prepareDirectory($locucio_path_absolute_final, FileSystemInterface::CREATE_DIRECTORY)) {
 							throw new Exception('ERROR en generar el directori: ' . $locucio_path_absolute_final);
 						}
-						
+
 						//Obtenim el nom del fitxer
 						$file_name = $file_locucio->getFilename(); //strtolower($file_locucio->getFilename());
-						
+
 						//Comprovem si l'extensió del fitxer és ".opus" ("opus" és un còdec d'àudio, mentre que "ogg" és un contenidor d'àudio que suporta entre d'altres el "opus")
-						if (str_ends_with($file_name, '.opus')) { 
+						if (str_ends_with($file_name, '.opus')) {
 							//L'extensió del fitxer és ".opus", la canviarem per "ogg"
 							$file_name = rtrim($file_name, '.opus') . '.ogg';
 						}
-						
+
 						//Desplaçarem/mourem el fitxer de la locució dins del subdirectori
 						\Drupal::logger('encapsulator')->notice('file_name: ' . $file_name);
 						$file_entity = $fileRepository->move($locucio_file , $locucio_path_absolute_final . $file_name , FileSystemInterface::EXISTS_REPLACE);
-						
+
 						//Modifiquem el nom de l'entitat que representa el fitxer de la locució
 						$file_entity->setFilename($file_name);
 						$file_entity->save();
-						
+
 						$entity->set('field_capsula_locucio', $file_entity);
-						
+
 					}
-					
-					
+
+
 					\Drupal::logger('encapsulator')->notice('OK en desar de la càpsula al directori de destí.');
 
 					\Drupal::logger('encapsulator')->notice('### FI DEL PROCÉS GENERACIÓ DE LA CÀPSULA ###');
-					
-					
+
+
 				} catch(Exception $e) {
 					$missatge = 'ERROR en la generació de la càpsula: ' . $e->getMessage();
 					\Drupal::logger('encapsulator')->error($missatge);
 					$messenger->addError($missatge);
 				}
-				
+
 				break;
 		}
-		
+
 	}
-	
+
 	return $entity;
-	
+
 }
 
 /**
  * Implements hook_entity_type_alter().
  */
 function encapsulator_entity_type_alter(array &$entity_types) {
-	
+
 	//Afegim la validació/restricció perquè la data-hora de fi d'emissió no pugui ser anterior (o igual) a la data-hora d'inici d'emissió
 	$entity_types['node']->addConstraint('StartEndDates');
-	
+
 }
 
 
@@ -697,9 +857,9 @@ function encapsulator_entity_type_alter(array &$entity_types) {
  */
 function encapsulator_entity_presave(EntityInterface $entity) {
 
-	//Just abans de desar-se el node, realitzarem les operacions necessàries per generar el fitxer d'àudio de la càpsula i col·locar els fitxers corresponents on pertoqui	
+	//Just abans de desar-se el node, realitzarem les operacions necessàries per generar el fitxer d'àudio de la càpsula i col·locar els fitxers corresponents on pertoqui
 	$entity = generar_capsula($entity);
-	
+
 	return $entity;
 }
 
@@ -709,19 +869,19 @@ function encapsulator_entity_presave(EntityInterface $entity) {
  */
 function encapsulator_entity_insert(EntityInterface $entity) {
 
-	
+
 	if ($entity->getEntityTypeId() == 'node') {
-	
+
 		switch ($entity->bundle()) {
 			case 'capsula':
-	
+
 				//Arribats en aquest hook, la inserció ja ha estat realitzada i per tant, ja saber l'identificador de node que té
 				//Amb aquest identificador de node, mourem el fitxer de la locució i de la càpsula a un directori que tingui per nom l'identificador del node
 
 				try {
-					
+
 					$messenger = \Drupal::messenger();
-					
+
 					\Drupal::logger('encapsulator')->notice('Hi hagut una nova càpsula. Es renombraran els noms dels fitxers.');
 
 					$id_tmp = $entity->get('field_capsula_directori_temporal')->getValue();
@@ -750,12 +910,12 @@ function encapsulator_entity_insert(EntityInterface $entity) {
 					if (!$fileSystem->prepareDirectory($locucio_path_absolute_final, FileSystemInterface::CREATE_DIRECTORY)) {
 						throw new Exception('ERROR en generar el directori: ' . $locucio_path_absolute_final);
 					}
-					
+
 					//Obtenim el nom del fitxer
 					$file_name = $file_locucio->getFilename(); //strtolower($file_locucio->getFilename());
 
 					//Comprovem si l'extensió del fitxer és ".opus" ("opus" és un còdec d'àudio, mentre que "ogg" és un contenidor d'àudio que suporta entre d'altres el "opus")
-					if (str_ends_with($file_name, '.opus')) { 
+					if (str_ends_with($file_name, '.opus')) {
 						//L'extensió del fitxer és ".opus", la canviarem per "ogg"
 						$file_name = rtrim($file_name, '.opus') . '.ogg';
 					}
@@ -763,11 +923,11 @@ function encapsulator_entity_insert(EntityInterface $entity) {
 					//Desplaçarem/mourem el fitxer de la locució dins del subdirectori
 					\Drupal::logger('encapsulator')->notice('file_name: ' . $file_name);
 					$file_entity = $fileRepository->move($locucio_file , $locucio_path_absolute_final . $file_name , FileSystemInterface::EXISTS_REPLACE);
-					
+
 					//Modifiquem el nom de l'entitat que representa el fitxer de la locució
 					$file_entity->setFilename($file_name);
 					$file_entity->save();
-					
+
 					$entity->set('field_capsula_locucio', $file_entity);
 
 					/************************************************************
@@ -818,8 +978,8 @@ function encapsulator_entity_insert(EntityInterface $entity) {
 					$file_entity->setFilename($id_def . '.png');
 					$file_entity->save();
 
-					
-					
+
+
 					//Guardem els canvis de l'entitat (això provocarà que es torni a llançar el hook_entity_presave, però no s'executarà el codi de la funció generar_capsula($entity) )
 					$entity->save();
 
@@ -828,14 +988,14 @@ function encapsulator_entity_insert(EntityInterface $entity) {
 					\Drupal::logger('encapsulator')->error($missatge);
 					$messenger->addError($missatge);
 				}
-				
+
 				break;
 		}
-	
+
 	}
-	
+
 	return $entity;
-	
+
 }
 
 
@@ -843,9 +1003,9 @@ function encapsulator_entity_insert(EntityInterface $entity) {
  * Implements hook_entity_update().
  */
 function encapsulator_entity_update(EntityInterface $entity) {
-	
+
 	//No caldrà fer res en aquest hook.
-	
+
 	return $entity;
 }
 
@@ -854,34 +1014,34 @@ function encapsulator_entity_update(EntityInterface $entity) {
  * Implements hook_form_alter().
  */
 function encapsulator_form_alter(&$form, \Drupal\Core\Form\FormStateInterface $form_state, $form_id)  {
-	
+
 	$view = $form_state->get('view');
 	//dpm($view->id());
 	//dpm($view->current_display);
-	
+
 	//Si ens trobem en un formulari concret, ocultarem determinats elements
 	if($form_id == 'node_capsula_form' || $form_id == 'node_capsula_edit_form') {
-		
+
 		//Ocultem l'apartat que permet crear revisions/versions d'un node
 		$form['revision_information']['#access'] = false;
-		
+
 		//Ocultem el camp "field_capsula_directori_temporal" per l'usuari
 		$form['#attached']['library'][] = 'encapsulator/encapsulator.css';
 		$form['field_capsula_directori_temporal']['#prefix'] = "<div class='hide-field'>";
 		$form['field_capsula_directori_temporal']['#suffix'] = "</div>";
 
 	}
-	
+
 	//$form['#form_id'] == 'views_exposed_form'
 	//$form['#id'] == 'views-exposed-form-view-capsules-page-1'
-	
+
 }
 
 /**
  * Implements hook_views_query_alter().
  */
 function encapsulator_views_query_alter(ViewExecutable $view, QueryPluginBase $query) {
-	
+
 	//Només en el cas que ens trobem en una vista concreta i en una de les seves visualitzacions concretes...
 	if ($view->id() == 'view_capsules' && $view->current_display == 'display_capsules') {
 
@@ -918,11 +1078,11 @@ function encapsulator_views_query_alter(ViewExecutable $view, QueryPluginBase $q
 			}
 
 		}
-		
+
 		//dpm($query->where[1]['conditions']);
-		
+
 	}
-	
+
 }
 
 
@@ -930,30 +1090,30 @@ function encapsulator_views_query_alter(ViewExecutable $view, QueryPluginBase $q
  * Implements hook_cron().
  */
 function encapsulator_cron() {
-	
+
 	\Drupal::logger('encapsulator')->notice('### INICI DE LA SINCRONITZACIÓ DE CÀPSULES ###');
-	
+
 	//Sincronitzem (copiem dins del directori './capsules/programades' les càpsules que s'han de poder emetre a l'hora actual que ens trobem
 	$path_capsules_programades = '/home/locutor/encapsulador/capsules/programades';
 	sincronitzar_capsules($path_capsules_programades);
-	
+
 	\Drupal::logger('encapsulator')->notice('### FI DE LA SINCRONITZACIÓ DE CÀPSULES ###');
-	
-	
+
+
 	\Drupal::logger('encapsulator')->notice('### INICI DEL PROCÉS PER ELIMINAR FITXERS I DIRECTORIS ORFES ###');
-	
+
 	//Esborrarem de disc tots aquells fitxers que ja no formin part de cap entitat/node
 	netejar_fitxers();
-	
+
 	//Esborrarem els subdirectoris 'locucions' que estiguin sense arxius
 	$path_locucions = '/home/locutor/encapsulador/locucions';
 	netejar_subdirectori($path_locucions);
-	
+
 	//Esborrarem els subdirectoris 'capsules' que estiguin sense arxius
 	$path_capsules = '/home/locutor/encapsulador/capsules';
 	netejar_subdirectori($path_capsules);
-	
+
 	\Drupal::logger('encapsulator')->notice('### FI DEL PROCÉS PER ELIMINAR FITXERS I DIRECTORIS ORFES ###');
 
-	
+
 }
